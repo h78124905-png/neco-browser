@@ -47,13 +47,18 @@ jobs:
 
       - name: Build, unit test and lint
         env:
-          KEYSTORE_FILE: ${{ runner.temp }}/https-browser-release.p12
           KEYSTORE_PASSWORD: ${{ secrets.HTTPS_BROWSER_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.HTTPS_BROWSER_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.HTTPS_BROWSER_KEY_PASSWORD }}
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
-        run: ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease
+        run: |
+          if [ -s "$RUNNER_TEMP/https-browser-release.p12" ]; then
+            export KEYSTORE_FILE="$RUNNER_TEMP/https-browser-release.p12"
+          else
+            unset KEYSTORE_FILE
+          fi
+          ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease
 
       - name: Upload signed release APK
         if: success()
