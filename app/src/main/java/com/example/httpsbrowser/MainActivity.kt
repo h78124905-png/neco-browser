@@ -514,14 +514,18 @@ class MainActivity : ComponentActivity() {
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
-                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener { _ ->
+                        // フォーカスを失ってもアプリ側から再生を停止しない。
+                    }
                     .build()
             }
             audioManager?.requestAudioFocus(audioFocusRequest!!)
         } else {
             @Suppress("DEPRECATION")
             audioManager?.requestAudioFocus(
-                null,
+                { _ ->
+                    // 旧APIでもフォーカス変化による再生停止は行わない。
+                },
                 AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN
             )
