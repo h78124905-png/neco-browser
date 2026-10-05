@@ -24,6 +24,7 @@ object AdBlockInjector {
             pointer-events: none !important;
         }
 
+        /* 黒画面・音だけ状態を防ぐための強制表示 */
         .html5-video-player video, video.html5-main-video,
         video[style*="display: none"], video[style*="visibility: hidden"] {
             display: block !important;
@@ -36,16 +37,18 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
+        // [1] Service Worker とキャッシュの抹殺 (SSAIのキャッシュ再利用を防ぐ)
         if (navigator.serviceWorker) {
             navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
             if (window.caches) caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
         }
 
+        // [2] JSON改変 (黒画面対策)
+        // ★中庸版の思想: status には触れず、errorScreen と reason だけを削除する
         const AD_KEYS = new Set([
             'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
-            'adReasons', 'adBreaks', 'adFormat', 'adYieldGroupKey',
-            'clientGpu', 'paidContentOverlay', 'adBreakParams',
-            'promoted', 'ypc_spin_up'
+            'adReasons', 'promoted', 'ypc_spin_up', 'adBreaks', 'adFormat',
+            'adYieldGroupKey', 'clientGpu', 'paidContentOverlay', 'adBreakParams'
         ]);
 
         function pruneAds(obj, depth = 0) {
@@ -53,18 +56,22 @@ object AdBlockInjector {
             for (const key in obj) {
                 if (AD_KEYS.has(key)) {
                     if (Array.isArray(obj[key])) obj[key] = [];
-                    else if (obj[key] && typeof obj[key] === 'object') obj[key] = {};
                     else delete obj[key];
-                } else if (key === 'playabilityStatus' && obj[key]) {
+                } 
+                // ★重要: status には触れない（映像トラック破棄を防止）
+                // errorScreen と reason だけを削除してエラー画面を消す
+                else if (key === 'playabilityStatus' && obj[key]) {
                     delete obj[key].errorScreen;
                     delete obj[key].reason;
                     delete obj[key].adBlockerDetected;
-                } else {
+                }
+                else {
                     pruneAds(obj[key], depth + 1);
                 }
             }
         }
 
+        // グローバル変数フック
         ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
             let val;
             try {
@@ -76,42 +83,38 @@ object AdBlockInjector {
             } catch (e) {}
         });
 
+        // [3] fetch フックの限定復活 (貫通対策)
+        // ★検知リスクを最小限にするため、/youtubei/v1/player のみに限定
         const origFetch = window.fetch;
         window.fetch = async function(...args) {
             const res = await origFetch.apply(this, args);
             const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-
+            
+            // player API のみフック
             if (/youtubei\/v1\/player/.test(url)) {
                 try {
                     const clone = res.clone();
                     const json = await clone.json();
                     pruneAds(json);
                     return new Response(JSON.stringify(json), {
-                        status: res.status,
-                        statusText: res.statusText,
-                        headers: res.headers
+                        status: res.status, statusText: res.statusText, headers: res.headers
                     });
                 } catch (e) {}
             }
             return res;
         };
 
+        // [4] スキップボタンの自動クリックのみ（videoタグへの操作は一切行わない）
         function clickSkipButton() {
-            const skipBtn = document.querySelector(
-                '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]'
-            );
+            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
             if (skipBtn) {
-                try { skipBtn.click(); } catch (e) {}
+                skipBtn.click();
             }
         }
 
         const observer = new MutationObserver(clickSkipButton);
-        observer.observe(document.documentElement || document, {
-            childList: true,
-            subtree: true
-        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
         setInterval(clickSkipButton, 500);
-        clickSkipButton();
     """
 
     private val FULL_SCRIPT = """
@@ -120,15 +123,13 @@ object AdBlockInjector {
                 if (!document.head || document.getElementById('__youtube_adblock_stealth_css')) return;
                 const style = document.createElement('style');
                 style.id = '__youtube_adblock_stealth_css';
-                style.textContent = ${quote(GENERIC_HIDE_CSS)};
+                style.textContent = \${quote(GENERIC_HIDE_CSS)};
                 document.head.appendChild(style);
             };
             install();
-            if (!document.head) {
-                document.addEventListener('DOMContentLoaded', install, {once:true});
-            }
+            if (!document.head) document.addEventListener('DOMContentLoaded', install, {once:true});
 
-            ${YOUTUBE_PRUNE_JS}
+            \${YOUTUBE_PRUNE_JS}
         })();
     """.trimIndent()
 
