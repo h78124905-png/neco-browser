@@ -1134,21 +1134,6 @@ class BrowserWebViewRegistry(
     }
 
     /** 再生保護の例外として、広告・計測専用と明示できる宛先だけ規則評価を継続する。 */
-    private fun isYoutubeAdOrTrackingNetwork(url: String): Boolean {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        val host = uri.host?.lowercase().orEmpty()
-        val path = uri.path?.lowercase().orEmpty()
-        return host == "ads.youtube.com" || host.endsWith(".ads.youtube.com") ||
-            host == "doubleclick.net" || host.endsWith(".doubleclick.net") ||
-            host == "googlesyndication.com" || host.endsWith(".googlesyndication.com") ||
-            host == "googleadservices.com" || host.endsWith(".googleadservices.com") ||
-            host == "googletagservices.com" || host.endsWith(".googletagservices.com") ||
-            ((host == "youtube.com" || host.endsWith(".youtube.com")) &&
-                (path.startsWith("/api/stats/ads") || path.startsWith("/_get_ads") ||
-                    path.startsWith("/pcs/activeview") || path.startsWith("/pagead") ||
-                    path.contains("/youtubei/v1/player/ad_break") || path.startsWith("/get_midroll_")))
-    }
-
     private fun recordVideoViewportMetrics(view: WebView, url: String, entry: Entry) {
         view.evaluateJavascript(VIDEO_VIEWPORT_METRICS_SCRIPT) { raw ->
             val metrics = runCatching { JSONTokener(raw ?: "\"\"").nextValue() as? String }.getOrNull().orEmpty()
