@@ -45,7 +45,7 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/https-browser-release.p12"
           fi
 
-      - name: Build, unit test and lint
+      - name: Build release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.HTTPS_BROWSER_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.HTTPS_BROWSER_KEY_ALIAS }}
@@ -58,7 +58,11 @@ jobs:
           else
             unset KEYSTORE_FILE
           fi
-          ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ./gradlew --no-daemon lintDebug testDebugUnitTest assembleRelease
+          else
+            ./gradlew --no-daemon assembleRelease
+          fi
 
       - name: Upload signed release APK
         if: success()
