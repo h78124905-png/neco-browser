@@ -30,7 +30,6 @@ import com.example.httpsbrowser.CrashDiagnostics
 import com.example.httpsbrowser.data.BrowserSettings
 import com.example.httpsbrowser.data.BrowserDownloadRequest
 import com.example.httpsbrowser.data.BrowserTab
-import java.io.ByteArrayInputStream
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -615,7 +614,7 @@ class BrowserWebViewRegistry(
         // 独自document-start dark CSSは使用しない。
     }
 
-    private inner class SecureClient(private val tabId: String) : MinimalAdBlockClient() {
+    private inner class SecureClient(private val tabId: String) : WebViewClientCompat() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val url = request.url.toString()
             if (!request.isForMainFrame) return false
@@ -641,13 +640,11 @@ class BrowserWebViewRegistry(
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
-            val url = request.url.toString()
-            if (entry.adBlockingEnabled && shouldBlockMinimalAd(url)) {
-                return createEmptyAdResponse()
-            }
-            // Fulgurisと同様、main frame要求でも完了処理を再armする。履歴遷移・SPA・
-            // YouTubeの複数onPageFinishedで、UI後処理が前回の状態に残るのを防ぐ。
-            if (request.isForMainFrame) entry.rearmPageLifecycle(url)
+
+            // ライフサイクル管理のみ残し、ネットワーク判定はすべて削除。
+            if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
+
+            // すべてスルー（AdGuard DNSとJSに完全委任）。
             return super.shouldInterceptRequest(view, request)
         }
 
