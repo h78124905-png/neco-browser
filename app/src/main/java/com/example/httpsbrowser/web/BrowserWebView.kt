@@ -1,5 +1,6 @@
-import java.io.ByteArrayInputStream
 package com.example.httpsbrowser.web
+
+import java.io.ByteArrayInputStream
 
 import android.content.Context
 import android.graphics.Bitmap
