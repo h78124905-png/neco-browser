@@ -5,6 +5,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 
 object AdBlockInjector {
+    // CI validation: keep the document-start ad injector build-checked.
 
     private const val GENERIC_HIDE_CSS = """
         ytd-ad-slot-renderer, ytd-promoted-video-renderer, ytd-promoted-sparkles-web-renderer,
