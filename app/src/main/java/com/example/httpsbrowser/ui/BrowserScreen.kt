@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.view.View
-import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,7 +40,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -290,6 +288,9 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                     pageArchiveLauncher.launch(fileName)
                 }
             ))
+            // WebViewはComposeツリーに置かず、Activity rootの永続native hostへ接続する。
+            // これによりホーム移動・タブ切替でAndroidView.onRelease/removeAllViews()が発生しない。
+            hostActivity.showNormalWebContent(registry, tab.id)
         }
     }
 
@@ -361,20 +362,22 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                             onBackgroundTap = ::endAddressEditing
                         )
                     } else {
-                        // Fulgurisと同じく、WebViewはツールバー外側のコンテンツ領域へ直接配置する。
-                        // Activity全体の背面host、positionInRoot、タッチ中継は使わない。
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { context ->
-                                FrameLayout(context).apply {
-                                    clipChildren = true
-                                    clipToPadding = true
+                        // WebView本体はComposeのAndroidViewには置かない。
+                        // Activity rootのnative hostをページ領域に合わせ、タブ切替でも親Viewを保持する。
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onGloballyPositioned { coordinates ->
+                                    val position = coordinates.positionInRoot()
+                                    hostActivity.setNormalWebContentBounds(
+                                        left = position.x.toInt(),
+                                        top = position.y.toInt(),
+                                        width = coordinates.size.width,
+                                        height = coordinates.size.height,
+                                        reserveRightTouchRail = true,
+                                        placeAboveCompose = true
+                                    )
                                 }
-                            },
-                            update = { container ->
-                                registry.attachToNativeHost(selectedTab.id, container)
-                            },
-                            onRelease = { container -> container.removeAllViews() }
                         )
                     }
                         if (!state.isFullscreen) {
