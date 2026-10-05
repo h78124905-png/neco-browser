@@ -32,6 +32,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # setup-android v3 otherwise tries to install the removed legacy
+          # "tools" package on current Android SDK repositories.
+          packages: platform-tools
 
       - name: Set up Rust for native content filtering
         uses: dtolnay/rust-toolchain@stable
@@ -79,7 +83,6 @@ jobs:
           name: HTTPS-Tab-Browser-release-apk
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          # 手動CIを連続実行しても無料枠を圧迫しないよう、配布確認に必要な期間だけ保管する。
           retention-days: 3
 
       - name: Upload lint reports when a check fails
@@ -91,5 +94,4 @@ jobs:
             app/build/reports/
             app/build/test-results/
           if-no-files-found: ignore
-          # 失敗調査用レポートも同じ短期保持とし、古い実行だけが自動的に期限切れになるようにする。
           retention-days: 3
