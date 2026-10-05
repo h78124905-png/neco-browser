@@ -5,6 +5,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 
 object AdBlockInjector {
+    // Safe rollback CI validation.
     private const val GENERIC_HIDE_CSS = """
         ytd-ad-slot-renderer, ytd-promoted-video-renderer, ytd-promoted-sparkles-web-renderer,
         ytd-display-ad-renderer, ytd-action-companion-ad-renderer, ytd-companion-slot-renderer,
