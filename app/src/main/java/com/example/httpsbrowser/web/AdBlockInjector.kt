@@ -37,6 +37,26 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
+        // Page Visibility API の完全偽装
+        Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+        Object.defineProperty(document, 'webkitHidden', { get: () => false, configurable: true });
+
+        // 関連イベントの完全握りつぶし
+        ['visibilitychange', 'pagehide', 'blur', 'focusout'].forEach(event => {
+            document.addEventListener(event, e => {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }, true);
+            window.addEventListener(event, e => {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }, true);
+        });
+
+        // window.onblur も無効化
+        window.onblur = null;
+
         // [1] Service Worker とキャッシュの抹殺 (SSAIのキャッシュ再利用を防ぐ)
         if (navigator.serviceWorker) {
             navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
