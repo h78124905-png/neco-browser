@@ -325,6 +325,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
         }
     }
 
+    val hostActivity = activity as? MainActivity
+
     Box(
         // system bars/IMEはMainActivityのrootで一度だけ処理済み。ここでpaddingを重ねない。
         modifier = if (selectedTab?.isHome == true) {
