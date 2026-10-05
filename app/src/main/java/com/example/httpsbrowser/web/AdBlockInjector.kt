@@ -101,13 +101,13 @@ object AdBlockInjector {
                 if (!document.head || document.getElementById('__youtube_adblock_stealth_css')) return;
                 const style = document.createElement('style');
                 style.id = '__youtube_adblock_stealth_css';
-                style.textContent = ${quote(GENERIC_HIDE_CSS)};
+                style.textContent = \${quote(GENERIC_HIDE_CSS)};
                 document.head.appendChild(style);
             };
             install();
             if (!document.head) document.addEventListener('DOMContentLoaded', install, {once:true});
 
-            $YOUTUBE_PRUNE_JS
+            \$YOUTUBE_PRUNE_JS
         })();
     """.trimIndent()
 
@@ -120,6 +120,5 @@ object AdBlockInjector {
     }
 
     private fun quote(value: String): String =
-        "'" + value.replace("\", "\\").replace("'", "\'").replace("
-", "\n") + "'"
+        "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
 }
