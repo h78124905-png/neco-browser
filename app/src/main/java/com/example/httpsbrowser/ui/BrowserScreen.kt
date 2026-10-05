@@ -371,7 +371,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                                 .fillMaxSize()
                                 .onGloballyPositioned { coordinates ->
                                     val position = coordinates.positionInRoot()
-                                    hostActivity.setNormalWebContentBounds(
+                                    hostActivity?.setNormalWebContentBounds(
                                         left = position.x.toInt(),
                                         top = position.y.toInt(),
                                         width = coordinates.size.width,
