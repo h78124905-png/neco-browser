@@ -681,7 +681,17 @@ class BrowserWebViewRegistry(
 
             // YouTube本編のgooglevideo.com配信は保護し、広告・計測専用の宛先だけ遮断する。
             if (entry.adBlockingEnabled && isYoutubeAdOrTrackingNetwork(request.url.toString())) {
-                return WebResourceResponse(null, null, null)
+                return WebResourceResponse(
+                    "application/json",
+                    "utf-8",
+                    200,
+                    "OK",
+                    mapOf(
+                        "Access-Control-Allow-Origin" to "*",
+                        "Cache-Control" to "no-store"
+                    ),
+                    "{}".byteInputStream()
+                )
             }
 
             return super.shouldInterceptRequest(view, request)
