@@ -39,15 +39,78 @@ object AdBlockInjector {
 
     private const val YOUTUBE_PRUNE_JS = """
 (function() {
-    if (navigator.serviceWorker) {
-        navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
-            if (r.scope.includes('youtube.com') || r.scope.includes('googlevideo.com')) r.unregister();
-        })).catch(() => {});
+    const AD_KEYS = new Set([
+        'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
+        'adReasons', 'promoted', 'ypc_spin_up', 'adBreaks', 'adFormat',
+        'adYieldGroupKey', 'clientGpu', 'paidContentOverlay'
+    ]);
+
+    function pruneAds(obj, depth = 0) {
+        if (!obj || typeof obj !== 'object' || depth > 12) return;
+        for (const key in obj) {
+            if (AD_KEYS.has(key)) {
+                if (Array.isArray(obj[key])) obj[key] = [];
+                else delete obj[key];
+            } else if (typeof obj[key] === 'object') {
+                pruneAds(obj[key], depth + 1);
+            }
+        }
     }
 
-    const findDeep = (selector) => {
+    ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
+        let val;
+        try {
+            Object.defineProperty(window, name, {
+                get() { return val; },
+                set(v) { pruneAds(v); val = v; },
+                configurable: true
+            });
+        } catch (e) {}
+    });
+
+    const matchesApi = url => /youtubei\/v1\/(player|next|browse|search)/.test(url || '');
+    const origFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const res = await origFetch.apply(this, args);
+        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+        if (matchesApi(url)) {
+            try {
+                const clone = res.clone();
+                const json = await clone.json();
+                pruneAds(json);
+                return new Response(JSON.stringify(json), {
+                    status: res.status, statusText: res.statusText, headers: res.headers
+                });
+            } catch (e) {}
+        }
+        return res;
+    };
+
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+        this._necoUrl = url;
+        return origOpen.apply(this, [method, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+        if (matchesApi(this._necoUrl)) {
+            this.addEventListener('readystatechange', function() {
+                if (this.readyState === 4 && this.status === 200) {
+                    try {
+                        const json = JSON.parse(this.responseText);
+                        pruneAds(json);
+                        Object.defineProperty(this, 'responseText', { writable: true, value: JSON.stringify(json) });
+                        Object.defineProperty(this, 'response', { writable: true, value: JSON.stringify(json) });
+                    } catch (e) {}
+                }
+            });
+        }
+        return origSend.apply(this, [body]);
+    };
+
+    const findDeep = selector => {
         const found = [];
-        const visit = (root) => {
+        const visit = root => {
             if (!root) return;
             try {
                 if (root.querySelectorAll) root.querySelectorAll(selector).forEach(el => found.push(el));
@@ -59,7 +122,7 @@ object AdBlockInjector {
         visit(document);
         return found;
     };
-    const findOneDeep = (selector) => findDeep(selector)[0] || null;
+    const findOneDeep = selector => findDeep(selector)[0] || null;
 
     const skipAndClean = () => {
         const player = findOneDeep('.html5-video-player');
@@ -71,14 +134,10 @@ object AdBlockInjector {
         ));
 
         if (isAdPlaying && video) {
-            let skipBtn = findOneDeep(
-                '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]'
-            );
+            let skipBtn = findOneDeep('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
             if (!skipBtn) {
                 const adContainer = findOneDeep('.ytp-ad-module, .video-ads');
-                if (adContainer && adContainer.querySelector) {
-                    skipBtn = adContainer.querySelector('button, [role="button"], svg');
-                }
+                if (adContainer && adContainer.querySelector) skipBtn = adContainer.querySelector('button, [role="button"], svg');
             }
             if (skipBtn) {
                 try { skipBtn.click(); } catch (_) {}
@@ -106,7 +165,7 @@ object AdBlockInjector {
         findDeep(adSelectors.join(',')).forEach(el => { try { el.remove(); } catch (_) {} });
     };
 
-    const observer = new MutationObserver(() => skipAndClean());
+    const observer = new MutationObserver(skipAndClean);
     observer.observe(document.documentElement, { attributes: true, childList: true, subtree: true });
     document.addEventListener('play', skipAndClean, true);
     document.addEventListener('timeupdate', skipAndClean, true);
