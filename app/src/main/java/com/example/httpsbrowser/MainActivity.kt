@@ -114,8 +114,8 @@ class MainActivity : ComponentActivity() {
             )
             WindowInsetsCompat.CONSUMED
         }
-        // 旧host APIはfullscreen/PiPと互換性を保つため残すが、通常ページはComposeの
-        // AndroidViewへ接続する。未初期化のまま可視性通知を受けないようroot内に保持する。
+        // 通常ページのWebViewはComposeのAndroidViewから完全に分離し、このnative hostへ
+        // 接続する。Composeの再構成・タブ切替で親ViewをremoveView()しない。
         normalWebContentHost = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             visibility = View.GONE
@@ -232,9 +232,10 @@ class MainActivity : ComponentActivity() {
         // Google系では右端予約を外し、重ねる型Webポップアップの全領域をWebViewへ渡す。
         normalWebContentReservesRightTouchRail = reserveRightTouchRail
         normalWebContentPlacedAboveCompose = placeAboveCompose
-        // WebViewは常にComposeの下に置く。ページBoxの外側はComposeのネイティブUIが
-        // 覆い、サイト内fixed/overlay要素をhostの高さで切らない。
-        composeOverlayView.bringToFront()
+        // 通常ページではnative hostをComposeより前面に置く。hostのLayoutParamsをページ矩形へ
+        // 更新するため、WebViewはComposeの再構成から完全に独立する。
+        if (placeAboveCompose) normalWebContentHost.bringToFront()
+        else composeOverlayView.bringToFront()
         val current = normalWebContentHost.layoutParams as? FrameLayout.LayoutParams ?: return
         normalWebContentBoundsReady = true
         pageTouchLeft = left
