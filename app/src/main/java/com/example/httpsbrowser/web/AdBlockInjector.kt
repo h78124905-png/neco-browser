@@ -24,7 +24,6 @@ object AdBlockInjector {
             pointer-events: none !important;
         }
 
-        /* 黒画面・音だけ状態を防ぐための強制表示 */
         .html5-video-player video, video.html5-main-video,
         video[style*="display: none"], video[style*="visibility: hidden"] {
             display: block !important;
@@ -37,13 +36,11 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
-        // [1] Service Worker とキャッシュの抹殺 (SSAIのキャッシュ再利用を防ぐ)
         if (navigator.serviceWorker) {
             navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
             if (window.caches) caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
         }
 
-        // [2] JSON改変 (NewPipeの思想: 広告フィールドを空にする)
         const AD_KEYS = new Set([
             'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
             'adReasons', 'adBreaks', 'adFormat', 'adYieldGroupKey',
@@ -79,7 +76,6 @@ object AdBlockInjector {
             } catch (e) {}
         });
 
-        // player API のみレスポンスをパース段階で整形
         const origFetch = window.fetch;
         window.fetch = async function(...args) {
             const res = await origFetch.apply(this, args);
