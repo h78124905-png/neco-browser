@@ -38,121 +38,75 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
-(function() {
-    const AD_KEYS = new Set([
-        'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
-        'adReasons', 'promoted', 'ypc_spin_up', 'adBreaks', 'adFormat',
-        'adYieldGroupKey', 'clientGpu', 'paidContentOverlay'
-    ]);
-
-    function pruneAds(obj, depth = 0) {
-        if (!obj || typeof obj !== 'object' || depth > 12) return;
-        for (const key in obj) {
-            if (AD_KEYS.has(key)) {
-                if (Array.isArray(obj[key])) obj[key] = [];
-                else delete obj[key];
-            } else if (typeof obj[key] === 'object') {
-                pruneAds(obj[key], depth + 1);
+    // [6] Service Worker & Cache の完全抹消 (追加)
+    if (navigator.serviceWorker) {
+        navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
+            if (r.scope.includes('youtube.com') || r.scope.includes('googlevideo.com')) {
+                r.unregister();
             }
-        }
+        })).catch(() => {});
+    }
+    if (window.caches) {
+        caches.keys().then(ks => ks.forEach(k => {
+            if (k.includes('youtube') || k.includes('googlevideo')) caches.delete(k);
+        })).catch(() => {});
     }
 
-    ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
-        let val;
-        try {
-            Object.defineProperty(window, name, {
-                get() { return val; },
-                set(v) { pruneAds(v); val = v; },
-                configurable: true
-            });
-        } catch (e) {}
-    });
+    // [7] 強化版 DOM Skipper (アクティブなvideoを特定し、srcパラメータで広告判定)
+    function getActiveVideo() {
+        const videos = Array.from(document.querySelectorAll('video'));
+        return videos.find(v => !v.paused && v.currentTime > 0) ||
+               videos.find(v => (v.src || v.currentSrc || '').includes('ctier=AD')) ||
+               videos[0];
+    }
 
-    const matchesApi = url => /youtubei\/v1\/(player|next|browse|search)/.test(url || '');
-    const origFetch = window.fetch;
-    window.fetch = async function(...args) {
-        const res = await origFetch.apply(this, args);
-        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-        if (matchesApi(url)) {
-            try {
-                const clone = res.clone();
-                const json = await clone.json();
-                pruneAds(json);
-                return new Response(JSON.stringify(json), {
-                    status: res.status, statusText: res.statusText, headers: res.headers
-                });
-            } catch (e) {}
-        }
-        return res;
-    };
+    function isAdVideo(video) {
+        if (!video) return false;
+        const src = video.src || video.currentSrc || '';
+        return src.includes('ctier=AD') ||
+               src.includes('adformat=') ||
+               src.includes('/ad/') ||
+               src.includes('&ad=');
+    }
 
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-        this._necoUrl = url;
-        return origOpen.apply(this, [method, url, ...rest]);
-    };
-    XMLHttpRequest.prototype.send = function(body) {
-        if (matchesApi(this._necoUrl)) {
-            this.addEventListener('readystatechange', function() {
-                if (this.readyState === 4 && this.status === 200) {
-                    try {
-                        const json = JSON.parse(this.responseText);
-                        pruneAds(json);
-                        Object.defineProperty(this, 'responseText', { writable: true, value: JSON.stringify(json) });
-                        Object.defineProperty(this, 'response', { writable: true, value: JSON.stringify(json) });
-                    } catch (e) {}
-                }
-            });
-        }
-        return origSend.apply(this, [body]);
-    };
+    function skipAndClean() {
+        const player = document.querySelector('.html5-video-player');
+        const video = getActiveVideo();
 
-    const findDeep = selector => {
-        const found = [];
-        const visit = root => {
-            if (!root) return;
-            try {
-                if (root.querySelectorAll) root.querySelectorAll(selector).forEach(el => found.push(el));
-                if (root.querySelectorAll) root.querySelectorAll('*').forEach(el => {
-                    if (el.shadowRoot) visit(el.shadowRoot);
-                });
-            } catch (_) {}
-        };
-        visit(document);
-        return found;
-    };
-    const findOneDeep = selector => findDeep(selector)[0] || null;
-
-    const skipAndClean = () => {
-        const player = findOneDeep('.html5-video-player');
-        const video = findOneDeep('video');
-        const isAdPlaying = !!(player && (
+        const isAdPlaying = (player && (
             player.classList.contains('ad-showing') ||
-            player.classList.contains('ad-interrupting') ||
-            findOneDeep('.ytp-ad-module, .video-ads, .ytp-ad-overlay-container')
-        ));
+            player.classList.contains('ad-interrupting')
+        )) ||
+        isAdVideo(video) ||
+        document.querySelector('.ytp-ad-module, .video-ads, .ytp-ad-text-overlay, .ytp-ad-preview-container');
 
         if (isAdPlaying && video) {
-            let skipBtn = findOneDeep('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
+            let skipBtn = document.querySelector(
+                '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]'
+            );
             if (!skipBtn) {
-                const adContainer = findOneDeep('.ytp-ad-module, .video-ads');
-                if (adContainer && adContainer.querySelector) skipBtn = adContainer.querySelector('button, [role="button"], svg');
+                const adContainer = document.querySelector('.ytp-ad-module, .video-ads');
+                if (adContainer) {
+                    skipBtn = adContainer.querySelector('button, [role="button"], svg');
+                }
             }
+
             if (skipBtn) {
                 try { skipBtn.click(); } catch (_) {}
             } else {
                 try {
-                    if (video.playbackRate < 16) {
-                        video.__necoAdSpeedup = true;
-                        video.playbackRate = 16;
-                        video.muted = true;
+                    if (video.playbackRate < 16) video.playbackRate = 16;
+                    video.muted = true;
+                    if (video.duration && video.currentTime < video.duration - 1) {
+                        video.currentTime = video.duration - 0.1;
                     }
                 } catch (_) {}
             }
-        } else if (video && video.__necoAdSpeedup) {
-            try { video.playbackRate = 1; video.muted = false; } catch (_) {}
-            try { delete video.__necoAdSpeedup; } catch (_) {}
+        } else if (video && video.playbackRate === 16) {
+            try {
+                video.playbackRate = 1;
+                video.muted = false;
+            } catch (_) {}
         }
 
         const adSelectors = [
@@ -162,16 +116,19 @@ object AdBlockInjector {
             'ytd-rich-item-renderer:has(> ytd-ad-slot-renderer)',
             'ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer)'
         ];
-        findDeep(adSelectors.join(',')).forEach(el => { try { el.remove(); } catch (_) {} });
-    };
+        document.querySelectorAll(adSelectors.join(',')).forEach(el => {
+            try { el.remove(); } catch (_) {}
+        });
+    }
+
+    setInterval(skipAndClean, 300);
 
     const observer = new MutationObserver(skipAndClean);
     observer.observe(document.documentElement, { attributes: true, childList: true, subtree: true });
     document.addEventListener('play', skipAndClean, true);
     document.addEventListener('timeupdate', skipAndClean, true);
-    document.addEventListener('volumechange', skipAndClean, true);
     skipAndClean();
-})();
+
 """
     private val FULL_SCRIPT = """
         (function() {
