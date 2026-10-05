@@ -39,34 +39,63 @@ object AdBlockInjector {
 
     private const val YOUTUBE_PRUNE_JS = """
 (function() {
-    // [1] Service Worker の強制削除 (JS側での保険)
     if (navigator.serviceWorker) {
         navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
-            if (r.scope.includes('youtube.com') || r.scope.includes('googlevideo.com')) {
-                r.unregister();
-            }
-        }));
+            if (r.scope.includes('youtube.com') || r.scope.includes('googlevideo.com')) r.unregister();
+        })).catch(() => {});
     }
 
-    // [2] 広告の強制スキップ & 物理削除 (JSON改変に依存しない安定手法)
+    const findDeep = (selector) => {
+        const found = [];
+        const visit = (root) => {
+            if (!root) return;
+            try {
+                if (root.querySelectorAll) root.querySelectorAll(selector).forEach(el => found.push(el));
+                if (root.querySelectorAll) root.querySelectorAll('*').forEach(el => {
+                    if (el.shadowRoot) visit(el.shadowRoot);
+                });
+            } catch (_) {}
+        };
+        visit(document);
+        return found;
+    };
+    const findOneDeep = (selector) => findDeep(selector)[0] || null;
+
     const skipAndClean = () => {
-        const player = document.querySelector('.html5-video-player');
-        const video = document.querySelector('video');
-        
-        // 広告再生中 (ad-showing / ad-interrupting) の検出
-        if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
-            // スキップボタンがあればクリック
-            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
-            if (skipBtn) {
-                skipBtn.click();
-            } else if (video) {
-                // ボタンがなければ強制終了 (currentTimeをdurationに)
-                video.currentTime = video.duration || 9999;
-                player.classList.remove('ad-showing', 'ad-interrupting');
+        const player = findOneDeep('.html5-video-player');
+        const video = findOneDeep('video');
+        const isAdPlaying = !!(player && (
+            player.classList.contains('ad-showing') ||
+            player.classList.contains('ad-interrupting') ||
+            findOneDeep('.ytp-ad-module, .video-ads, .ytp-ad-overlay-container')
+        ));
+
+        if (isAdPlaying && video) {
+            let skipBtn = findOneDeep(
+                '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]'
+            );
+            if (!skipBtn) {
+                const adContainer = findOneDeep('.ytp-ad-module, .video-ads');
+                if (adContainer && adContainer.querySelector) {
+                    skipBtn = adContainer.querySelector('button, [role="button"], svg');
+                }
             }
+            if (skipBtn) {
+                try { skipBtn.click(); } catch (_) {}
+            } else {
+                try {
+                    if (video.playbackRate < 16) {
+                        video.__necoAdSpeedup = true;
+                        video.playbackRate = 16;
+                        video.muted = true;
+                    }
+                } catch (_) {}
+            }
+        } else if (video && video.__necoAdSpeedup) {
+            try { video.playbackRate = 1; video.muted = false; } catch (_) {}
+            try { delete video.__necoAdSpeedup; } catch (_) {}
         }
 
-        // 広告コンテナの物理削除 (display:none より remove() がレイアウト崩れを防ぐ)
         const adSelectors = [
             'ytd-ad-slot-renderer', 'ytd-promoted-video-renderer', 'ytd-promoted-sparkles-web-renderer',
             'ytd-display-ad-renderer', 'ytd-action-companion-ad-renderer', 'ytd-companion-slot-renderer',
@@ -74,19 +103,14 @@ object AdBlockInjector {
             'ytd-rich-item-renderer:has(> ytd-ad-slot-renderer)',
             'ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer)'
         ];
-        document.querySelectorAll(adSelectors.join(',')).forEach(el => el.remove());
+        findDeep(adSelectors.join(',')).forEach(el => { try { el.remove(); } catch (_) {} });
     };
 
-    // [3] 高頻度監視 (MutationObserver + Video Events)
-    const observer = new MutationObserver(skipAndClean);
+    const observer = new MutationObserver(() => skipAndClean());
     observer.observe(document.documentElement, { attributes: true, childList: true, subtree: true });
-    
-    // 動画の再生・時間更新イベントでもスキップチェックを実行
     document.addEventListener('play', skipAndClean, true);
     document.addEventListener('timeupdate', skipAndClean, true);
     document.addEventListener('volumechange', skipAndClean, true);
-    
-    // 初期実行
     skipAndClean();
 })();
 """
