@@ -132,6 +132,86 @@ object AdBlockInjector {
             }
         }
 
+        // ==========================================================
+        // [Auto-Resume Layer] (独立した安全弁・既存処理の後段に配置)
+        // ==========================================================
+        let lastUserActionTime = 0;
+        let userIntent = null; // 'pause' | 'play' | 'interaction' | null
+
+        // 1. ユーザー操作の検知 (UI構造変更に強い汎用的な監視)
+        document.addEventListener('pointerdown', (e) => {
+            const player = e.target.closest('.html5-video-player');
+            if (player) {
+                lastUserActionTime = Date.now();
+                const playBtn = e.target.closest('.ytp-play-button, .ytp-large-play-button');
+                if (playBtn) {
+                    const video = document.querySelector('video.html5-main-video');
+                    userIntent = video && !video.paused ? 'pause' : 'play';
+                } else {
+                    userIntent = 'interaction';
+                }
+            }
+        }, true);
+
+        // 2. キーボード操作の検知 (入力フィールド除外)
+        document.addEventListener('keydown', (e) => {
+            const active = document.activeElement;
+            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+                return;
+            }
+            if (e.code === 'Space' || e.key === ' ' || e.key === 'k') {
+                lastUserActionTime = Date.now();
+                const video = document.querySelector('video.html5-main-video');
+                userIntent = video && !video.paused ? 'pause' : 'play';
+            }
+        }, true);
+
+        // 3. pause イベントの監視と安全な復帰 (状態遷移ベース)
+        document.addEventListener('pause', (e) => {
+            const video = e.target;
+            if (video.tagName !== 'VIDEO' || video.ended) return;
+
+            const now = Date.now();
+            const isRecentUserAction = (now - lastUserActionTime) < 3000;
+
+            if (userIntent === 'pause') return;
+            if (isRecentUserAction && video.seeking) return;
+
+            const player = document.querySelector('.html5-video-player');
+            if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) return;
+
+            setTimeout(() => {
+                if (video.paused && !video.ended && !video.seeking && userIntent !== 'pause') {
+                    const player = document.querySelector('.html5-video-player');
+                    const isAd = player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
+                    if (!isAd) {
+                        video.play().catch(() => {});
+                    }
+                }
+            }, 400);
+        }, true);
+
+        // 4. play イベントで意図をリセット (操作時刻は保持)
+        document.addEventListener('play', (e) => {
+            if (e.target.tagName === 'VIDEO') {
+                userIntent = null;
+            }
+        }, true);
+
+        // 5. 保険のポーリング (状態遷移中の誤作動防止付き)
+        setInterval(() => {
+            const video = document.querySelector('video.html5-main-video');
+            if (!video || video.ended || !video.paused) return;
+            if (userIntent === 'pause') return;
+            if (video.seeking) return;
+
+            const player = document.querySelector('.html5-video-player');
+            const isAd = player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
+            if (isAd) return;
+
+            video.play().catch(() => {});
+        }, 2000);
+
         const observer = new MutationObserver(clickSkipButton);
         observer.observe(document.documentElement, { childList: true, subtree: true });
         setInterval(clickSkipButton, 500);
