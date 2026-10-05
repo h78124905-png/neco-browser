@@ -38,6 +38,76 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
+(function() {
+    const AD_KEYS = new Set([
+        'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
+        'adReasons', 'promoted', 'ypc_spin_up', 'adBreaks', 'adFormat',
+        'adYieldGroupKey', 'clientGpu', 'paidContentOverlay'
+    ]);
+
+    function pruneAds(obj, depth = 0) {
+        if (!obj || typeof obj !== 'object' || depth > 12) return;
+        for (const key in obj) {
+            if (AD_KEYS.has(key)) {
+                if (Array.isArray(obj[key])) obj[key] = [];
+                else delete obj[key];
+            } else if (typeof obj[key] === 'object') {
+                pruneAds(obj[key], depth + 1);
+            }
+        }
+    }
+
+    ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
+        let val;
+        try {
+            Object.defineProperty(window, name, {
+                get() { return val; },
+                set(v) { pruneAds(v); val = v; },
+                configurable: true
+            });
+        } catch (e) {}
+    });
+
+    const matchesApi = url => /youtubei\/v1\/(player|next|browse|search)/.test(url || '');
+    const origFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const res = await origFetch.apply(this, args);
+        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+        if (matchesApi(url)) {
+            try {
+                const clone = res.clone();
+                const json = await clone.json();
+                pruneAds(json);
+                return new Response(JSON.stringify(json), {
+                    status: res.status, statusText: res.statusText, headers: res.headers
+                });
+            } catch (e) {}
+        }
+        return res;
+    };
+
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+        this._necoUrl = url;
+        return origOpen.apply(this, [method, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+        if (matchesApi(this._necoUrl)) {
+            this.addEventListener('readystatechange', function() {
+                if (this.readyState === 4 && this.status === 200) {
+                    try {
+                        const json = JSON.parse(this.responseText);
+                        pruneAds(json);
+                        Object.defineProperty(this, 'responseText', { writable: true, value: JSON.stringify(json) });
+                        Object.defineProperty(this, 'response', { writable: true, value: JSON.stringify(json) });
+                    } catch (e) {}
+                }
+            });
+        }
+        return origSend.apply(this, [body]);
+    };
+
     // [6] Service Worker & Cache の完全抹消 (追加)
     if (navigator.serviceWorker) {
         navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
