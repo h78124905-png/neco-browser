@@ -242,14 +242,15 @@ class MainActivity : ComponentActivity() {
         pageTouchTop = top
         pageTouchRight = left + width
         pageTouchBottom = top + height
-        // left/top/width/heightはタッチ転送用だけに保持する。host自体はMATCH_PARENTのまま。
-        if (current.width != ViewGroup.LayoutParams.MATCH_PARENT || current.height != ViewGroup.LayoutParams.MATCH_PARENT ||
-            current.leftMargin != 0 || current.topMargin != 0
+        // WebView hostそのものをComposeが計測したページ矩形へ合わせる。
+        // これでhostをComposeより前面に置いても、下部のAddressBar/TabBarは操作できる。
+        if (current.width != width || current.height != height ||
+            current.leftMargin != left || current.topMargin != top
         ) {
-            current.leftMargin = 0
-            current.topMargin = 0
-            current.width = ViewGroup.LayoutParams.MATCH_PARENT
-            current.height = ViewGroup.LayoutParams.MATCH_PARENT
+            current.leftMargin = left
+            current.topMargin = top
+            current.width = width
+            current.height = height
             normalWebContentHost.layoutParams = current
         }
         if (normalWebContentHost.childCount > 0) {
