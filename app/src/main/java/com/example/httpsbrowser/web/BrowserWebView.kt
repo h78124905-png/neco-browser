@@ -27,6 +27,8 @@ import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import androidx.webkit.ServiceWorkerClientCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import android.content.Intent
 import com.example.httpsbrowser.CrashDiagnostics
 import com.example.httpsbrowser.data.BrowserSettings
@@ -436,6 +438,7 @@ class BrowserWebViewRegistry(
                 }
             }
         }, VIDEO_DIMENSIONS_BRIDGE_NAME)
+        installYoutubeServiceWorkerBlocker()
         webViewClient = SecureClient(tabId)
         webChromeClient = SecureChromeClient(tabId)
         AdBlockInjector.inject(this)
@@ -616,6 +619,37 @@ class BrowserWebViewRegistry(
         // 独自document-start dark CSSは使用しない。
     }
 
+    /**
+     * YouTube/GoogleVideo のService Worker経由スクリプトをWebView側で遮断する。
+     * SWの通常キャッシュや動画本体を一括遮断せず、SWスクリプト相当のURLだけを対象にする。
+     */
+    private fun installYoutubeServiceWorkerBlocker() {
+        runCatching {
+            val controller = ServiceWorkerControllerCompat.getInstance()
+            controller.setServiceWorkerClient(object : ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
+                    val url = request.url.toString()
+                    val lower = url.lowercase(Locale.ROOT)
+                    val isYoutubeServiceWorker =
+                        lower.contains("youtube.com/sw.js") ||
+                        lower.contains("youtube.com/service_worker") ||
+                        (lower.contains("googlevideo.com") && lower.endsWith(".js"))
+                    return if (isYoutubeServiceWorker) {
+                        WebResourceResponse("text/javascript", "utf-8", "".byteInputStream())
+                    } else {
+                        null
+                    }
+                }
+            })
+            CrashDiagnostics.record("youtube_service_worker_block_ready", "enabled=true")
+        }.onFailure { throwable ->
+            CrashDiagnostics.record(
+                "youtube_service_worker_block_unavailable",
+                "${throwable.javaClass.simpleName}: ${throwable.message.orEmpty()}"
+            )
+        }
+    }
+
     private inner class SecureClient(private val tabId: String) : WebViewClientCompat() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val url = request.url.toString()
@@ -643,10 +677,13 @@ class BrowserWebViewRegistry(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
 
-            // ライフサイクル管理のみ残し、ネットワーク判定はすべて削除。
             if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
 
-            // すべてスルー（AdGuard DNSとJSに完全委任）。
+            // YouTube本編のgooglevideo.com配信は保護し、広告・計測専用の宛先だけ遮断する。
+            if (entry.adBlockingEnabled && isYoutubeAdOrTrackingNetwork(request.url.toString())) {
+                return WebResourceResponse(null, null, null)
+            }
+
             return super.shouldInterceptRequest(view, request)
         }
 
