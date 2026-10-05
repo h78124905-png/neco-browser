@@ -213,20 +213,25 @@ class BrowserWebViewRegistry(
 
     /**
      * 選択タブの通常WebViewをActivity rootのnative hostへ接続する。
-     * Compose AndroidViewを介さないため、再構成時にAwContentsの親・測定経路を変えない。
+     *
+     * 重要: タブ切替では以前のWebViewを親から絶対に外さない。
+     * WebViewをremoveView()するとChromiumが描画先を失ったと判断し、YouTubeの
+     * HTML5動画・音声再生を停止する端末があるため、各タブのWebViewを同じhostに
+     * 接続したまま積層し、選択タブだけを最前面へ移動する。
      */
     fun attachToNativeHost(tabId: String, host: ViewGroup): Boolean {
         val view = entries[tabId]?.webView ?: return false
-        // タブ切替で前面WebViewを一括除去したり不可視化すると、Chromiumは
-        // 描画先の消滅として扱う場合がある。YouTubeの再生sessionを維持するため、
-        // 既存WebViewはhost内で可視のまま重ね、選択タブだけを前面へ移動する。
         if (view.parent !== host) {
+            // 新しくhostへ接続するWebViewだけを移動する。
+            // 既にhost内にいる非選択タブのWebViewには触れない。
             (view.parent as? ViewGroup)?.removeView(view)
             host.addView(view, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             ))
         }
+        // 非選択WebViewもVISIBLEのままhostに保持する。選択WebViewを前面に置けば、
+        // 画面上ではそれが全面を覆うため、背面タブの表示がユーザーへ露出することはない。
         view.visibility = View.VISIBLE
         view.bringToFront()
         return true
