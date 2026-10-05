@@ -10,6 +10,10 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.AudioAttributes
+import android.os.PowerManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
@@ -39,6 +43,9 @@ import com.example.httpsbrowser.ui.HttpsBrowserTheme
 import com.example.httpsbrowser.web.BrowserWebViewRegistry
 
 class MainActivity : ComponentActivity() {
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var audioManager: AudioManager? = null
     private var incomingUrl by mutableStateOf<String?>(null)
     private lateinit var appRoot: FrameLayout
     /** 通常ページをComposeのAndroidViewから分離して保持する、選択タブ専用のnative host。 */
@@ -475,6 +482,67 @@ class MainActivity : ComponentActivity() {
         if (pictureInPictureTransitionRequested && !isInPictureInPictureMode) {
             fullscreenVideoView?.let(::enterPictureInPictureFromPendingRequest)
         }
+        // WebView.onPause() は呼ばず、バックグラウンド再生用のCPU維持だけを確保する。
+        acquireWakeLockIfNeeded()
+        requestAudioFocusIfNeeded()
+    }
+
+    private fun acquireWakeLockIfNeeded() {
+        if (wakeLock == null) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "neco-browser:youtube-bg-lock"
+            )
+        }
+        if (wakeLock?.isHeld != true) {
+            wakeLock?.acquire()
+        }
+    }
+
+    private fun requestAudioFocusIfNeeded() {
+        if (audioManager == null) {
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest == null) {
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAcceptsDelayedFocusGain(true)
+                    .build()
+            }
+            audioManager?.requestAudioFocus(audioFocusRequest!!)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager?.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+        }
+    }
+
+    private fun releaseWakeLockIfNeeded() {
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+        wakeLock = null
+    }
+
+    private fun abandonAudioFocusIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager?.abandonAudioFocus(null)
+        }
+        audioFocusRequest = null
+        audioManager = null
     }
 
     @Suppress("DEPRECATION")
@@ -513,6 +581,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        releaseWakeLockIfNeeded()
+        abandonAudioFocusIfNeeded()
         fullscreenVideoView?.removeOnLayoutChangeListener(pipHintLayoutListener)
         fullscreenVideoView = null
         fullscreenContainer = null
