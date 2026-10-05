@@ -129,8 +129,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        // Fulgurisと同じく、画面の表示階層は単一のUI rootにする。
-        // 旧native hostを背面に残すとWebViewの親・z順・タッチ座標が二重管理になる。
+        // 通常WebView hostをrootへ常設し、その上にCompose UIを重ねる。
+        // WebViewはComposeのライフサイクルから分離され、タブ切替でも親Viewを失わない。
+        appRoot.addView(normalWebContentHost, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
         appRoot.addView(composeOverlayView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
