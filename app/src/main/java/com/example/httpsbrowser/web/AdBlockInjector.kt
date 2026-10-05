@@ -245,6 +245,5 @@ object AdBlockInjector {
     }
 
     private fun quote(value: String): String =
-        "'" + value.replace("\", "\\").replace("'", "\'").replace("
-", "\n") + "'"
+        "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
 }
