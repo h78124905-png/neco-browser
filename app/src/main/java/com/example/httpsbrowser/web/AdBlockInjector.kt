@@ -38,129 +38,58 @@ object AdBlockInjector {
     """
 
     private const val YOUTUBE_PRUNE_JS = """
-        // [1] Service Worker & Cache の完全抹消
-        if (navigator.serviceWorker) {
-            navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
-        }
-        if (window.caches) {
-            caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
-        }
+(function() {
+    // [1] Service Worker の強制削除 (JS側での保険)
+    if (navigator.serviceWorker) {
+        navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
+            if (r.scope.includes('youtube.com') || r.scope.includes('googlevideo.com')) {
+                r.unregister();
+            }
+        }));
+    }
 
-        // [2] JSON改変ロジック (Deep Pruning)
-        function pruneAds(obj, depth = 0) {
-            if (!obj || typeof obj !== 'object' || depth > 12) return;
-            for (const key in obj) {
-                if (/^(ad|ads|promotion|paid|sponsor|preroll|midroll|postroll)/i.test(key)) {
-                    delete obj[key];
-                } 
-                else if (key === 'playabilityStatus' && obj[key]) {
-                    obj[key].status = 'OK';
-                    delete obj[key].errorScreen;
-                    delete obj[key].reason;
-                    delete obj[key].contextualized;
-                    delete obj[key].adBlockerDetected;
-                }
-                else {
-                    pruneAds(obj[key], depth + 1);
-                }
+    // [2] 広告の強制スキップ & 物理削除 (JSON改変に依存しない安定手法)
+    const skipAndClean = () => {
+        const player = document.querySelector('.html5-video-player');
+        const video = document.querySelector('video');
+        
+        // 広告再生中 (ad-showing / ad-interrupting) の検出
+        if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
+            // スキップボタンがあればクリック
+            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
+            if (skipBtn) {
+                skipBtn.click();
+            } else if (video) {
+                // ボタンがなければ強制終了 (currentTimeをdurationに)
+                video.currentTime = video.duration || 9999;
+                player.classList.remove('ad-showing', 'ad-interrupting');
             }
         }
 
-        // グローバル変数フック
-        ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
-            let val;
-            try {
-                Object.defineProperty(window, name, {
-                    get() { return val; },
-                    set(v) { pruneAds(v); val = v; },
-                    configurable: true
-                });
-            } catch (e) {}
-        });
+        // 広告コンテナの物理削除 (display:none より remove() がレイアウト崩れを防ぐ)
+        const adSelectors = [
+            'ytd-ad-slot-renderer', 'ytd-promoted-video-renderer', 'ytd-promoted-sparkles-web-renderer',
+            'ytd-display-ad-renderer', 'ytd-action-companion-ad-renderer', 'ytd-companion-slot-renderer',
+            '.ytp-ad-module', '.video-ads', '#player-ads', '.ytp-ad-overlay-container',
+            'ytd-rich-item-renderer:has(> ytd-ad-slot-renderer)',
+            'ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer)'
+        ];
+        document.querySelectorAll(adSelectors.join(',')).forEach(el => el.remove());
+    };
 
-        // [3] Fetch API フック
-        const origFetch = window.fetch;
-        window.fetch = async function(...args) {
-            const res = await origFetch.apply(this, args);
-            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-            if (/youtubei\/v1\/(player|next|browse|search)/.test(url)) {
-                try {
-                    const clone = res.clone();
-                    const json = await clone.json();
-                    pruneAds(json);
-                    return new Response(JSON.stringify(json), {
-                        status: res.status, statusText: res.statusText, headers: res.headers
-                    });
-                } catch (e) {}
-            }
-            return res;
-        };
-
-        // [4] XMLHttpRequest (XHR) フック
-        const origOpen = XMLHttpRequest.prototype.open;
-        const origSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            this._url = url;
-            return origOpen.apply(this, [method, url, ...rest]);
-        };
-        XMLHttpRequest.prototype.send = function(body) {
-            if (/youtubei\/v1\/(player|next|browse|search)/.test(this._url)) {
-                this.addEventListener('readystatechange', function() {
-                    if (this.readyState === 4 && this.status === 200) {
-                        try {
-                            const json = JSON.parse(this.responseText);
-                            pruneAds(json);
-                            Object.defineProperty(this, 'responseText', { writable: true, value: JSON.stringify(json) });
-                            Object.defineProperty(this, 'response', { writable: true, value: JSON.stringify(json) });
-                        } catch (e) {}
-                    }
-                });
-            }
-            return origSend.apply(this, [body]);
-        };
-
-        // [5] 広告強制スキップ & スタイル修復 (超攻撃的モード)
-        const forceSkipAndFix = () => {
-            const player = document.querySelector('.html5-video-player');
-            const video = document.querySelector('video');
-            
-            if (player && video) {
-                // 広告再生中 (ad-showing) なら強制終了
-                if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
-                    video.currentTime = video.duration || 9999; // 広告を終わらせる
-                    player.classList.remove('ad-showing', 'ad-interrupting');
-                    video.play().catch(() => {}); // 本編再開
-                }
-                
-                // スタイル隠蔽の強制修復
-                if (video.style.visibility === 'hidden' || video.style.display === 'none' || video.style.opacity === '0') {
-                    video.style.visibility = 'visible';
-                    video.style.display = 'block';
-                    video.style.opacity = '1';
-                    video.style.zIndex = '9999';
-                }
-            }
-            
-            // スキップボタン自動クリック
-            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
-            if (skipBtn) skipBtn.click();
-        };
-
-        // 500msごとに監視・修復
-        setInterval(forceSkipAndFix, 500);
-
-        // DOM変更の常時監視
-        const observer = new MutationObserver(() => {
-            forceSkipAndFix();
-        });
-        observer.observe(document.documentElement, { 
-            attributes: true, 
-            subtree: true, 
-            childList: true,
-            attributeFilter: ['class', 'style', 'src']
-        });
-    """
-
+    // [3] 高頻度監視 (MutationObserver + Video Events)
+    const observer = new MutationObserver(skipAndClean);
+    observer.observe(document.documentElement, { attributes: true, childList: true, subtree: true });
+    
+    // 動画の再生・時間更新イベントでもスキップチェックを実行
+    document.addEventListener('play', skipAndClean, true);
+    document.addEventListener('timeupdate', skipAndClean, true);
+    document.addEventListener('volumechange', skipAndClean, true);
+    
+    // 初期実行
+    skipAndClean();
+})();
+"""
     private val FULL_SCRIPT = """
         (function() {
             const install = function() {
@@ -186,5 +115,5 @@ object AdBlockInjector {
     }
 
     private fun quote(value: String): String =
-        "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
+        "'" + value.replace("'", "\\'").replace("\n", "\\n") + "'"
 }
