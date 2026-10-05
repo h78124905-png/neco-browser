@@ -36,6 +36,15 @@ jobs:
           # The legacy "tools" SDK package is no longer available.
           packages: platform-tools
 
+      - name: Restore signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.HTTPS_BROWSER_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/https-browser-release.p12"
+          fi
+
       - name: Build, unit test and lint
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/https-browser-release.p12
