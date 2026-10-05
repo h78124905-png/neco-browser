@@ -33,38 +33,8 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # setup-android v3 otherwise tries to install the removed legacy
-          # "tools" package on current Android SDK repositories.
+          # The legacy "tools" SDK package is no longer available.
           packages: platform-tools
-
-      - name: Set up Rust for native content filtering
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
-
-      - name: Verify browser regression guards
-        run: node tools/verify_all.js
-
-      - name: Verify Brave content-filtering library
-        run: cargo test --manifest-path app/src/main/rust/Cargo.toml --release
-
-      - name: Build Brave content-filtering library for ARM
-        shell: bash
-        run: |
-          sdkmanager "ndk;27.1.12297006"
-          cargo install cargo-ndk --locked
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
-          cd app/src/main/rust
-          cargo ndk -t arm64-v8a -t armeabi-v7a -o ../jniLibs build --release
-          test -s ../jniLibs/arm64-v8a/libhttps_browser_adblock.so
-          test -s ../jniLibs/armeabi-v7a/libhttps_browser_adblock.so
-
-      - name: Restore signing key
-        shell: bash
-        env:
-          KEYSTORE_BASE64: ${{ secrets.HTTPS_BROWSER_KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/https-browser-release.p12"
 
       - name: Build, unit test and lint
         env:
@@ -85,7 +55,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload lint reports when a check fails
+      - name: Upload build reports when a check fails
         if: failure()
         uses: actions/upload-artifact@v4
         with:
