@@ -6,9 +6,7 @@ import androidx.webkit.WebViewFeature
 
 object AdBlockInjector {
 
-    // 1. CSS: 映像の強制表示と広告オーバーレイの完全排除
     private const val GENERIC_HIDE_CSS = """
-        /* 広告要素の完全排除 */
         [class*="ad-"], [id*="ad-"],
         [class*="banner"], [id*="banner"],
         [class*="sponsor"], [id*="sponsor"],
@@ -25,11 +23,8 @@ object AdBlockInjector {
             pointer-events: none !important;
         }
 
-        /* YouTubeプレーヤーの隠蔽を強制解除 (最重要) */
         .html5-video-player video,
         video.html5-main-video,
-        .html5-video-player.ad-showing video,
-        .html5-video-player.ad-interrupting video,
         video[style*="display: none"],
         video[style*="visibility: hidden"] {
             display: block !important;
@@ -39,43 +34,26 @@ object AdBlockInjector {
             position: relative !important;
             background: transparent !important;
         }
-
-        /* プレイヤー自体の広告状態クラスを無効化 */
-        .html5-video-player.ad-showing,
-        .html5-video-player.ad-interrupting {
-            /* 広告状態であってもプレーヤーの構造は維持 */
-        }
     """
 
-    // 2. JS: SW無効化、APIフック(XHR/Fetch)、DOM修復
     private const val YOUTUBE_PRUNE_JS = """
-        // [1] Service Worker の無効化 (隠蔽スクリプトの再注入を防ぐ)
-        if (navigator.serviceWorker) {
-            navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-            Object.defineProperty(navigator, 'serviceWorker', { get: () => undefined });
-        }
+        // [1] Service Worker は無効化しない (YouTubeの正常な動作を維持)
 
-        const AD_KEYS = new Set([
-            'adPlacements', 'playerAds', 'adBreakHeartbeatParams', 'adSlots',
-            'adReasons', 'promoted', 'ypc_spin_up', 'adIntro', 'paidContent',
-            'adBreaks', 'adBreak', 'adLogMessage', 'adClient', 'adSlot', 'adSense',
-            'adTrackingUrl', 'adUrl', 'adFormat', 'adType', 'adCueRanges',
-            'adModules', 'adPreroll', 'adState'
-        ]);
-
-        // [2] JSON改変ロジック (広告削除 + エラー状態の強制解除)
+        // [2] 強化版 JSON改変ロジック (Deep Pruning)
         function pruneAds(obj, depth = 0) {
             if (!obj || typeof obj !== 'object' || depth > 12) return;
             for (const key in obj) {
-                if (AD_KEYS.has(key)) {
+                // ad, promotion, paid, sponsor で始まるキーを全て削除
+                if (/^(ad|ads|promotion|paid|sponsor|preroll|midroll|postroll)/i.test(key)) {
                     delete obj[key];
-                }
-                // ★最重要: playabilityStatus を "OK" に偽装し、黒画面(エラー)を防ぐ
+                } 
+                // playabilityStatus を "OK" に偽装し、黒画面(エラー)とアドブロック検知を防ぐ
                 else if (key === 'playabilityStatus' && obj[key]) {
                     obj[key].status = 'OK';
                     delete obj[key].errorScreen;
                     delete obj[key].reason;
                     delete obj[key].contextualized;
+                    delete obj[key].adBlockerDetected;
                 }
                 else {
                     pruneAds(obj[key], depth + 1);
@@ -100,7 +78,7 @@ object AdBlockInjector {
         window.fetch = async function(...args) {
             const res = await origFetch.apply(this, args);
             const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-            if (/youtubei/v1/(player|next|browse|search)/.test(url)) {
+            if (/youtubei\/v1\/(player|next|browse|search)/.test(url)) {
                 try {
                     const clone = res.clone();
                     const json = await clone.json();
@@ -121,7 +99,7 @@ object AdBlockInjector {
             return origOpen.apply(this, [method, url, ...rest]);
         };
         XMLHttpRequest.prototype.send = function(body) {
-            if (/youtubei/v1/(player|next|browse|search)/.test(this._url)) {
+            if (/youtubei\/v1\/(player|next|browse|search)/.test(this._url)) {
                 this.addEventListener('readystatechange', function() {
                     if (this.readyState === 4 && this.status === 200) {
                         try {
@@ -136,35 +114,49 @@ object AdBlockInjector {
             return origSend.apply(this, [body]);
         };
 
-        // [5] DOMの常時監視・修復 (MutationObserver)
-        // YouTubeがJSで隠蔽しようとするのを、ミリ秒単位で修復する
+        // [5] 広告用 video タグの強制破壊 (Ad Video Killer)
+        const killAdVideo = (video) => {
+            const src = video.src || video.currentSrc || '';
+            // 広告ストリームの特徴 (ctier=AD, oad, adformat など)
+            if (src.includes('ctier=AD') || src.includes('&oad') || src.includes('adformat') || src.includes('/ad_') || (src.includes('googlevideo.com/videoplayback?') && src.includes('ad'))) {
+                video.pause();
+                video.removeAttribute('src');
+                video.load(); // 強制リセット
+            }
+        };
+
+        // [6] DOMの常時監視・修復 (MutationObserver)
         const observer = new MutationObserver(() => {
             // 広告要素の物理削除
             document.querySelectorAll('.ytp-ad-module, .video-ads, #player-ads, .ytp-ad-overlay-container, ytd-ad-slot-renderer').forEach(el => el.remove());
+            
+            // スキップボタンの自動クリック
+            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, button[aria-label*="Skip"]');
+            if (skipBtn) skipBtn.click();
 
-            // プレイヤーの広告クラス削除と強制再生
-            const players = document.querySelectorAll('.html5-video-player.ad-showing, .html5-video-player.ad-interrupting');
-            players.forEach(el => {
-                el.classList.remove('ad-showing', 'ad-interrupting');
-                const video = el.querySelector('video');
-                if (video && video.paused) {
-                    video.play().catch(() => {});
+            // 全ての video タグをチェックし、広告ストリームなら強制破壊
+            document.querySelectorAll('video').forEach(v => {
+                killAdVideo(v);
+                // インラインスタイルの隠蔽を剥奪
+                if (v.style.display === 'none' || v.style.visibility === 'hidden') {
+                    v.style.display = 'block';
+                    v.style.visibility = 'visible';
+                    v.style.opacity = '1';
                 }
             });
 
-            // video タグへのインラインスタイル隠蔽を剥奪
-            document.querySelectorAll('video[style*="display: none"], video[style*="visibility: hidden"]').forEach(v => {
-                v.style.display = 'block';
-                v.style.visibility = 'visible';
-                v.style.opacity = '1';
+            // プレイヤーの広告クラス削除
+            const players = document.querySelectorAll('.html5-video-player.ad-showing, .html5-video-player.ad-interrupting');
+            players.forEach(el => {
+                el.classList.remove('ad-showing', 'ad-interrupting');
             });
         });
 
-        observer.observe(document.documentElement, {
-            attributes: true,
-            subtree: true,
+        observer.observe(document.documentElement, { 
+            attributes: true, 
+            subtree: true, 
             childList: true,
-            attributeFilter: ['class', 'style']
+            attributeFilter: ['class', 'style', 'src']
         });
     """
 
@@ -192,7 +184,6 @@ object AdBlockInjector {
         }
     }
 
-    // Kotlin文字列からJS文字列リテラルへの安全なエスケープ
     private fun quote(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
 }
