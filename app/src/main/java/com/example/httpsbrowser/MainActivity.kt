@@ -572,7 +572,14 @@ class MainActivity : ComponentActivity() {
                 builder.setAspectRatio(Rational(16, 9))
             }
         }
-        // PiP内の白いカスタムアクションは表示しない。PiPは動画表示とブラウザ共存だけに限定する。
+        // PiPは標準RemoteActionで、左から10秒戻し・再生/停止・10秒送りを表示する。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setActions(listOf(
+                createPipSeekAction(-10, REQUEST_PIP_SEEK_BACK, "◀ 10秒戻る"),
+                createPipPlayPauseAction(),
+                createPipSeekAction(10, REQUEST_PIP_SEEK_FORWARD, "10秒送り ▶")
+            ))
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // 明示PiPの補助としてauto-enterも有効にする。通常ページではvideoViewがnullのため無効。
             builder.setAutoEnterEnabled(videoView != null)
@@ -604,6 +611,24 @@ class MainActivity : ComponentActivity() {
         )
         return RemoteAction(
             Icon.createWithResource(this, R.drawable.ic_browser), label, label, pendingIntent
+        )
+    }
+
+    private fun createPipPlayPauseAction(): RemoteAction {
+        val intent = Intent(this, PipControlReceiver::class.java).apply {
+            action = ACTION_PIP_PLAY_PAUSE
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            REQUEST_PIP_PLAY_PAUSE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return RemoteAction(
+            Icon.createWithResource(this, R.drawable.ic_browser),
+            "● 再生/停止",
+            "再生/停止",
+            pendingIntent
         )
     }
 
@@ -647,15 +672,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    internal fun handlePipPlayPause() {
+        videoControlsRegistry?.let { registry ->
+            videoControlsTabId?.let { tabId -> registry.toggleVideoPlayback(tabId) }
+        }
+    }
+
     internal companion object {
         private var activeActivity: MainActivity? = null
         private var pipActivity: MainActivity? = null
         internal fun activeInstance(): MainActivity? = pipActivity ?: activeActivity
         const val ACTION_PIP_SEEK_BACK = "com.example.httpsbrowser.PIP_SEEK_BACK"
         const val ACTION_PIP_SEEK_FORWARD = "com.example.httpsbrowser.PIP_SEEK_FORWARD"
+        const val ACTION_PIP_PLAY_PAUSE = "com.example.httpsbrowser.PIP_PLAY_PAUSE"
         const val EXTRA_PIP_SEEK_SECONDS = "seconds"
         const val REQUEST_PIP_SEEK_BACK = 4_022
         const val REQUEST_PIP_SEEK_FORWARD = 4_023
+        const val REQUEST_PIP_PLAY_PAUSE = 4_024
         const val MIN_PIP_ASPECT_RATIO = 1f / 2.39f
         const val MAX_PIP_ASPECT_RATIO = 2.39f
         private val VIDEO_SPEEDS = floatArrayOf(1.0f, 1.5f, 2.0f)

@@ -319,6 +319,25 @@ class BrowserWebViewRegistry(
         )
     }
 
+    /** PiPの中央ボタンから、現在タブの実動画を再生/停止する。 */
+    fun toggleVideoPlayback(tabId: String) {
+        entries[tabId]?.webView?.evaluateJavascript(
+            """
+            (function(){
+              var videos = Array.from(document.querySelectorAll('video'));
+              var active = videos.find(function(v){ return !v.paused && !v.ended; }) || videos[0];
+              if (!active) return;
+              if (active.paused || active.ended) {
+                active.play().catch(function(){});
+              } else {
+                active.pause();
+              }
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
     fun scrollBy(tabId: String, deltaY: Int) = entries[tabId]?.webView?.scrollBy(0, deltaY)
     fun scrollToTop(tabId: String) = entries[tabId]?.webView?.scrollTo(0, 0)
     /** `pageDown(true)`は縮尺値に依存せずWebView自身の文書末尾へ移動する。 */
