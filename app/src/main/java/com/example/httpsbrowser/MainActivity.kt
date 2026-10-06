@@ -195,7 +195,7 @@ class MainActivity : ComponentActivity() {
      */
     fun requestWebMediaPictureInPicture(): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode) return false
-        webMediaPlaying = true
+        // YouTubeのPiPボタンから呼ばれる明示的なユーザー操作なので、HTML5 PiPには戻さずActivity PiPへ直行する。
         updatePictureInPictureParams(null)
         val entered = runCatching {
             enterPictureInPictureMode(buildPictureInPictureParams(null))
@@ -579,13 +579,15 @@ class MainActivity : ComponentActivity() {
         if (webMediaPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
             if (fullscreenVideoView != null) {
                 enterFullscreenPictureInPictureMode()
-            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                // Android 12以降はsetAutoEnterEnabled(true)に任せる。
+            } else {
+                // inline videoもAndroid 12+を含め、離脱時に明示的にActivity PiPへ入れる。
+                // autoEnterEnabledは補助として残すが、自動遷移だけには依存しない。
+                updatePictureInPictureParams(null)
                 val entered = runCatching {
                     enterPictureInPictureMode(buildPictureInPictureParams(null))
                 }.getOrDefault(false)
                 if (!entered) {
-                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave_pre_s")
+                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave")
                 }
             }
         }
