@@ -454,16 +454,19 @@ class MainActivity : ComponentActivity() {
         val webView = normalWebContentHost.getChildAt(0) ?: return false
         if (normalWebContentHost.width <= 0 || normalWebContentHost.height <= 0) return false
 
-        val location = IntArray(2)
-        normalWebContentHost.getLocationOnScreen(location)
-        val hostRect = Rect(location[0], location[1],
-            location[0] + normalWebContentHost.width,
-            location[1] + normalWebContentHost.height)
+        val webLocation = IntArray(2)
+        webView.getLocationOnScreen(webLocation)
+        val hostRect = Rect(
+            webLocation[0], webLocation[1],
+            webLocation[0] + normalWebContentHost.width,
+            webLocation[1] + normalWebContentHost.height)
         val crop = Rect(videoBounds)
         if (!crop.intersect(hostRect) || crop.width() <= 0 || crop.height() <= 0) return false
 
-        val localLeft = crop.left - location[0]
-        val localTop = crop.top - location[1]
+        // videoBoundsはBrowserWebView側ですでに「画面座標」へ変換済み。
+        // ここでは再変換せず、WebViewの画面座標との差だけを使う。
+        val localLeft = crop.left - webLocation[0]
+        val localTop = crop.top - webLocation[1]
         val scaleX = normalWebContentHost.width.toFloat() / crop.width().toFloat()
         val scaleY = normalWebContentHost.height.toFloat() / crop.height().toFloat()
         if (!scaleX.isFinite() || !scaleY.isFinite() || scaleX <= 0f || scaleY <= 0f) return false
@@ -474,13 +477,17 @@ class MainActivity : ComponentActivity() {
         inlinePipOriginalWebViewScaleX = webView.scaleX
         inlinePipOriginalWebViewScaleY = webView.scaleY
 
+        // scaleX/YはデフォルトではView中央を基準にするため、先に左上をpivotへ固定する。
+        // これで「動画の左上をhostの左上へ移動する」という計算と一致する。
+        webView.pivotX = 0f
+        webView.pivotY = 0f
         webView.translationX = -localLeft * scaleX
         webView.translationY = -localTop * scaleY
         webView.scaleX = webView.scaleX * scaleX
         webView.scaleY = webView.scaleY * scaleY
         inlinePipCropActive = true
         CrashDiagnostics.record("pip_inline_crop_prepared",
-            "tab=" + tabId + " video=" + crop.width() + "x" + crop.height() + " scale=" + scaleX + "x" + scaleY)
+            "tab=" + tabId + " screenRect=" + crop + " webOrigin=" + webLocation[0] + "," + webLocation[1] + " scale=" + scaleX + "x" + scaleY)
         return true
     }
 
@@ -488,6 +495,8 @@ class MainActivity : ComponentActivity() {
         if (!inlinePipCropActive) return
         val webView = normalWebContentHost.getChildAt(0)
         if (webView != null) {
+            webView.pivotX = webView.width / 2f
+            webView.pivotY = webView.height / 2f
             webView.translationX = inlinePipOriginalWebViewTranslationX
             webView.translationY = inlinePipOriginalWebViewTranslationY
             webView.scaleX = inlinePipOriginalWebViewScaleX
