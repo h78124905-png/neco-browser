@@ -266,6 +266,9 @@ object AdBlockInjector {
 
     private val FULL_SCRIPT = """
         (function() {
+            // Google検索ではYouTube向けdocument-start injectorを適用しない。
+            const host = (location.hostname || '').toLowerCase();
+            if (host === 'google.com' || host.endsWith('.google.com') || host.startsWith('google.')) return;
             const install = function() {
                 if (!document.head || document.getElementById('__youtube_adblock_stealth_css')) return;
                 const style = document.createElement('style');

@@ -381,7 +381,7 @@ class BrowserWebViewRegistry(
                   'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}' +
                   '*{visibility:hidden!important;}' +
                   '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important;transform:none!important;}' +
-                  '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
+                  '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:var(--neko-pip-video-left)!important;top:var(--neko-pip-video-top)!important;right:auto!important;bottom:auto!important;width:var(--neko-pip-video-width)!important;height:var(--neko-pip-video-height)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:fill!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
                 (document.head||document.documentElement).appendChild(style);
 
                 var node=active;
@@ -389,6 +389,15 @@ class BrowserWebViewRegistry(
                   node.setAttribute('data-neko-pip-ancestor','1');
                   node=node.parentElement;
                 }
+                var vw=active.videoWidth||0, vh=active.videoHeight||0;
+                if(vw<=0 || vh<=0){ var r=active.getBoundingClientRect(); vw=Math.max(1,r.width); vh=Math.max(1,r.height); }
+                var cw=Math.max(1,window.innerWidth), ch=Math.max(1,window.innerHeight);
+                var scale=Math.min(cw/vw,ch/vh);
+                var rw=Math.max(1,Math.round(vw*scale)), rh=Math.max(1,Math.round(vh*scale));
+                document.documentElement.style.setProperty('--neko-pip-video-width',rw+'px');
+                document.documentElement.style.setProperty('--neko-pip-video-height',rh+'px');
+                document.documentElement.style.setProperty('--neko-pip-video-left',Math.round((cw-rw)/2)+'px');
+                document.documentElement.style.setProperty('--neko-pip-video-top',Math.round((ch-rh)/2)+'px');
                 active.setAttribute('data-neko-pip-video','1');
                 window.__nekoBrowserInlinePipVideo=active;
                 return true;

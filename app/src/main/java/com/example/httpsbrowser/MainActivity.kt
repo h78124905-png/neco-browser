@@ -465,14 +465,15 @@ class MainActivity : ComponentActivity() {
             return
         }
         val effectivePageUrl = registry.currentUrl(tabId) ?: pageUrl
-        if (fullscreenContainer == null && !isAllowedVideoControlHost(effectivePageUrl, allowedHosts)) {
-            videoControlsContainer?.visibility = View.GONE
-            return
-        }
-
         val sameVideoTarget = videoControlsContainer != null &&
             videoControlsTabId == tabId &&
             videoControlsRegistry === registry
+
+        // 動画生成直後の一時的なiframe/blob URL変化で、同じ動画の操作UIを消さない。
+        if (fullscreenContainer == null && !isAllowedVideoControlHost(effectivePageUrl, allowedHosts) && !sameVideoTarget) {
+            videoControlsContainer?.visibility = View.GONE
+            return
+        }
 
         videoControlsRegistry = registry
         videoControlsTabId = tabId
