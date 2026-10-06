@@ -262,6 +262,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                 onHideFullscreen = ::handleWebViewHideFullscreen,
                 onVideoDimensions = { width, height ->
                     hostActivity.updatePictureInPictureVideoDimensions(tab.id, width, height)
+                    // reload/SPA遷移で生成された新しいvideoにも、現在の速度設定を一度だけ再適用する。
+                    registry.setVideoPlaybackRate(tab.id, state.settings.videoPlaybackRate)
                     hostActivity.showVideoControls(
                         registry = registry,
                         tabId = tab.id,
