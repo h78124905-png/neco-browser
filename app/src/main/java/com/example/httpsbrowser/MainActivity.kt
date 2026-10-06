@@ -488,6 +488,12 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // タブ/動画が切り替わったら、古いタブの操作UIを必ず一つだけ除去する。
+        videoControlsContainer?.let { old ->
+            (old.parent as? ViewGroup)?.removeView(old)
+        }
+        videoControlsContainer = null
+
         videoControlsInitialRate = initialRate
         videoSpeedRate = initialRate.coerceIn(1.0f, 2.0f)
         videoSpeedIndex = VIDEO_SPEEDS.indices.minByOrNull { kotlin.math.abs(VIDEO_SPEEDS[it] - videoSpeedRate) } ?: 0
