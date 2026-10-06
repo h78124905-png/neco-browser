@@ -265,7 +265,9 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                     hostActivity.showVideoControls(
                         registry = registry,
                         tabId = tab.id,
-                        pageUrl = tab.url,
+                        // Composeが保持しているtab.urlはSPA/reload直後に一瞬古いことがあるため、
+                        // RegistryがWebViewから取得した現在URLを優先する。
+                        pageUrl = registry.currentUrl(tab.id) ?: tab.url,
                         allowedHosts = state.settings.videoControlHosts,
                         initialRate = state.settings.videoPlaybackRate,
                         onPlaybackRateChanged = { rate ->
@@ -275,6 +277,17 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                 },
                 onVideoBounds = { left, top, right, bottom ->
                     hostActivity.updatePictureInPictureVideoBounds(tab.id, left, top, right, bottom)
+                    // 解像度通知が遅れる動画でも、実DOMの矩形が取れた時点で操作UIを出せる。
+                    hostActivity.showVideoControls(
+                        registry = registry,
+                        tabId = tab.id,
+                        pageUrl = registry.currentUrl(tab.id) ?: tab.url,
+                        allowedHosts = state.settings.videoControlHosts,
+                        initialRate = state.settings.videoPlaybackRate,
+                        onPlaybackRateChanged = { rate ->
+                            viewModel.updateSettings { it.copy(videoPlaybackRate = rate) }
+                        }
+                    )
                 },
                 onPermission = { origin, resources, reply ->
                     pendingPermission = PendingWebPermission(origin, resources, requiredAndroidPermissions(resources), reply)
