@@ -11,10 +11,6 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.media.AudioAttributes
-import android.os.PowerManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
@@ -47,11 +43,7 @@ import com.example.httpsbrowser.ui.HttpsBrowserTheme
 import com.example.httpsbrowser.web.BrowserWebViewRegistry
 
 class MainActivity : ComponentActivity() {
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var audioFocusRequest: AudioFocusRequest? = null
-    private var audioManager: AudioManager? = null
     private var mediaSession: MediaSessionCompat? = null
-    private var mediaPlaybackServiceStarted = false
     @Volatile private var webVideoPlaying = false
     private var incomingUrl by mutableStateOf<String?>(null)
     private lateinit var appRoot: FrameLayout
@@ -559,68 +551,6 @@ class MainActivity : ComponentActivity() {
         requestAudioFocusIfNeeded()
     }
 
-    private fun acquireWakeLockIfNeeded() {
-        if (wakeLock == null) {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "neco-browser:youtube-bg-lock"
-            )
-        }
-        if (wakeLock?.isHeld != true) {
-            wakeLock?.acquire()
-        }
-    }
-
-    private fun requestAudioFocusIfNeeded() {
-        if (audioManager == null) {
-            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (audioFocusRequest == null) {
-                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setOnAudioFocusChangeListener { _ ->
-                        // フォーカスを失ってもアプリ側から再生を停止しない。
-                    }
-                    .build()
-            }
-            audioManager?.requestAudioFocus(audioFocusRequest!!)
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager?.requestAudioFocus(
-                { _ ->
-                    // 旧APIでもフォーカス変化による再生停止は行わない。
-                },
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN
-            )
-        }
-    }
-
-    private fun releaseWakeLockIfNeeded() {
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-        }
-        wakeLock = null
-    }
-
-    private fun abandonAudioFocusIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager?.abandonAudioFocus(null)
-        }
-        audioFocusRequest = null
-        audioManager = null
-    }
-
     @Suppress("DEPRECATION")
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -667,8 +597,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        releaseWakeLockIfNeeded()
-        abandonAudioFocusIfNeeded()
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
