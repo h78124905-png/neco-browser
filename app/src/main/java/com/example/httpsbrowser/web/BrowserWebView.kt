@@ -286,32 +286,59 @@ class BrowserWebViewRegistry(
             view.post { notifyHistoryState(tabId, view) }
         }
     }
-    /** 動画操作overlayから現在タブ内のvideo要素へ再生速度を適用する。ページ遷移後も同じAPIを再利用できる。 */
+    /** 動画操作overlayから現在タブ内のvideo要素へ再生速度を適用する。
+     * DOM全体を250msごとに走査したりratechangeを人工発火させず、動画生成・再生開始時だけ再適用する。
+     */
     fun setVideoPlaybackRate(tabId: String, rate: Float) {
         val safeRate = rate.coerceIn(0.25f, 4.0f)
         entries[tabId]?.webView?.evaluateJavascript(
             """
             (function(rate){
               window.__httpsBrowserPlaybackRate = rate;
-              function applyRate(){
-                document.querySelectorAll('video').forEach(function(v){
-                  try {
+
+              function applyRateToVideo(v){
+                if(!v || v.tagName !== 'VIDEO') return;
+                try {
+                  if (Math.abs(v.defaultPlaybackRate - rate) > 0.001) {
                     v.defaultPlaybackRate = rate;
-                    if (Math.abs(v.playbackRate - rate) > 0.001) v.playbackRate = rate;
-                    v.dispatchEvent(new Event('ratechange'));
-                  } catch (_) {}
-                });
+                  }
+                  if (Math.abs(v.playbackRate - rate) > 0.001) {
+                    v.playbackRate = rate;
+                  }
+                } catch (_) {}
               }
-              applyRate();
+
+              function applyAll(){
+                document.querySelectorAll('video').forEach(applyRateToVideo);
+              }
+
+              applyAll();
+
               if (!window.__httpsBrowserPlaybackRateObserver) {
-                var observer = new MutationObserver(applyRate);
+                var observer = new MutationObserver(function(records){
+                  records.forEach(function(record){
+                    if(record.type !== 'childList') return;
+                    record.addedNodes.forEach(function(node){
+                      if(!node || node.nodeType !== 1) return;
+                      if(node.tagName === 'VIDEO') applyRateToVideo(node);
+                      if(node.querySelectorAll) node.querySelectorAll('video').forEach(applyRateToVideo);
+                    });
+                  });
+                });
                 observer.observe(document.documentElement || document, {childList:true, subtree:true});
-                document.addEventListener('loadedmetadata', applyRate, true);
-                document.addEventListener('canplay', applyRate, true);
+
+                document.addEventListener('loadedmetadata', function(event){
+                  if(event.target && event.target.tagName === 'VIDEO') applyRateToVideo(event.target);
+                }, true);
+                document.addEventListener('canplay', function(event){
+                  if(event.target && event.target.tagName === 'VIDEO') applyRateToVideo(event.target);
+                }, true);
+                document.addEventListener('play', function(event){
+                  if(event.target && event.target.tagName === 'VIDEO') applyRateToVideo(event.target);
+                }, true);
+
                 window.__httpsBrowserPlaybackRateObserver = observer;
               }
-              if (window.__httpsBrowserPlaybackRateTimer) clearInterval(window.__httpsBrowserPlaybackRateTimer);
-              window.__httpsBrowserPlaybackRateTimer = setInterval(applyRate, 250);
             })($safeRate);
             """.trimIndent(),
             null
