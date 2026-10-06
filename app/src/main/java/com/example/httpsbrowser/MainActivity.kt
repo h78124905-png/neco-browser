@@ -70,7 +70,6 @@ class MainActivity : ComponentActivity() {
     private var videoSpeedIndex = 0
     private var videoSpeedRate = 1.0f
     private var videoSpeedButton: TextView? = null
-    private var videoPlayPauseButton: TextView? = null
     private val videoBoundsByTab = ConcurrentHashMap<String, Rect>()
     private var onVideoSpeedChanged: ((Float) -> Unit)? = null
     private var videoControlsRegistry: BrowserWebViewRegistry? = null
@@ -170,7 +169,6 @@ class MainActivity : ComponentActivity() {
     /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
     fun onWebMediaPlay(title: String?, url: String?) {
         webMediaPlaying = true
-        videoPlayPauseButton?.text = "Ⅱ"
         // 通常再生ではfullscreenVideoViewが存在しないため、PiP条件を明示的に更新する。
         // Android 12+はこのauto-enter設定を離脱直前に参照して自動でPiPへ移行する。
         updatePictureInPictureParams(null)
@@ -188,13 +186,11 @@ class MainActivity : ComponentActivity() {
         // PiP移行中に再生状態をfalseへ戻すと、通常再生PiPの条件を失うため保持する。
         if (pictureInPictureTransitionRequested) return
         webMediaPlaying = false
-        videoPlayPauseButton?.text = "▶"
         setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
     }
 
     fun onWebMediaEnded() {
         webMediaPlaying = false
-        videoPlayPauseButton?.text = "▶"
         setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
     }
 
@@ -514,34 +510,9 @@ class MainActivity : ComponentActivity() {
 
     private fun createVideoControlsContainer(): FrameLayout = FrameLayout(this).apply {
         minimumWidth = (52 * resources.displayMetrics.density).toInt()
-        minimumHeight = (224 * resources.displayMetrics.density).toInt()
+        minimumHeight = (168 * resources.displayMetrics.density).toInt()
         val pip = createPipButton()
         addView(pip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        val playPause = TextView(this@MainActivity).apply {
-            text = if (webMediaPlaying) "Ⅱ" else "▶"
-            contentDescription = "再生/一時停止"
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(8, 14, 8, 14)
-            minimumWidth = (44 * resources.displayMetrics.density).toInt()
-            minimumHeight = (52 * resources.displayMetrics.density).toInt()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 40f
-                setColor(0xC20D1118.toInt())
-                setStroke(1, 0x88FFFFFF.toInt())
-            }
-            setOnClickListener {
-                videoControlsRegistry?.let { registry ->
-                    videoControlsTabId?.let { id -> registry.toggleVideoPlayback(id) }
-                }
-            }
-        }
-        videoPlayPauseButton = playPause
-        addView(playPause, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = (56 * resources.displayMetrics.density).toInt()
-        })
         val speed = TextView(this@MainActivity).apply {
             text = "×${videoSpeedRate}"
             contentDescription = "再生速度を変更"
