@@ -273,6 +273,9 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                         }
                     )
                 },
+                onVideoBounds = { left, top, right, bottom ->
+                    hostActivity.updatePictureInPictureVideoBounds(tab.id, left, top, right, bottom)
+                },
                 onPermission = { origin, resources, reply ->
                     pendingPermission = PendingWebPermission(origin, resources, requiredAndroidPermissions(resources), reply)
                 },
@@ -288,6 +291,19 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                     pageArchiveLauncher.launch(fileName)
                 }
             ))
+            val host = runCatching { Uri.parse(tab.url).host?.lowercase(Locale.ROOT)?.removePrefix("www.") }.getOrNull().orEmpty()
+            if (host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be") {
+                hostActivity.showVideoControls(
+                    registry = registry,
+                    tabId = tab.id,
+                    pageUrl = tab.url,
+                    allowedHosts = state.settings.videoControlHosts,
+                    initialRate = state.settings.videoPlaybackRate,
+                    onPlaybackRateChanged = { rate ->
+                        viewModel.updateSettings { it.copy(videoPlaybackRate = rate) }
+                    }
+                )
+            }
             // WebViewはComposeツリーに置かず、Activity rootの永続native hostへ接続する。
             // これによりホーム移動・タブ切替でAndroidView.onRelease/removeAllViews()が発生しない。
             hostActivity.showNormalWebContent(registry, tab.id)
