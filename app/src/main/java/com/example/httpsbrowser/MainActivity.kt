@@ -44,7 +44,7 @@ import com.example.httpsbrowser.web.BrowserWebViewRegistry
 
 class MainActivity : ComponentActivity() {
     private var mediaSession: MediaSessionCompat? = null
-    @Volatile private var webVideoPlaying = false
+    @Volatile private var webMediaPlaying = false
     private var incomingUrl by mutableStateOf<String?>(null)
     private lateinit var appRoot: FrameLayout
     /** 通常ページをComposeのAndroidViewから分離して保持する、選択タブ専用のnative host。 */
@@ -166,8 +166,8 @@ class MainActivity : ComponentActivity() {
     }
 
     /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
-    fun onWebVideoPlay(title: String?, url: String?) {
-        webVideoPlaying = true
+    fun onWebMediaPlay(title: String?, url: String?) {
+        webMediaPlaying = true
         mediaSession?.setMetadata(
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title?.ifBlank { "動画" } ?: "動画")
@@ -177,13 +177,13 @@ class MainActivity : ComponentActivity() {
         setWebMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
     }
 
-    fun onWebVideoPause() {
-        webVideoPlaying = false
+    fun onWebMediaPause() {
+        webMediaPlaying = false
         setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
     }
 
-    fun onWebVideoEnded() {
-        webVideoPlaying = false
+    fun onWebMediaEnded() {
+        webMediaPlaying = false
         setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
     }
 
@@ -554,7 +554,7 @@ class MainActivity : ComponentActivity() {
         super.onUserLeaveHint()
         // 動画再生中にホームへ離脱したら、通常のバックグラウンド再生ではなくPiPへ移行する。
         // Android 12+はauto-enterを併用し、API 26〜30はここから明示的に入る。
-        if (webVideoPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
+        if (webMediaPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
             if (fullscreenVideoView != null) {
                 enterFullscreenPictureInPictureMode()
             } else {
@@ -667,7 +667,7 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // 動画再生中はinline videoでもホーム離脱時にAndroidへPiP移行を任せる。
-            builder.setAutoEnterEnabled(webVideoPlaying || videoView != null)
+            builder.setAutoEnterEnabled(webMediaPlaying || videoView != null)
             if (videoView != null) builder.setSeamlessResizeEnabled(true)
         }
         return builder.build()
