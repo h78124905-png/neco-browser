@@ -181,6 +181,9 @@ class MainActivity : ComponentActivity() {
     }
 
     fun onWebMediaPause() {
+        // ホーム遷移直後はChromiumがpagehide/pauseを通知することがある。
+        // PiP移行中に再生状態をfalseへ戻すと、通常再生PiPの条件を失うため保持する。
+        if (pictureInPictureTransitionRequested) return
         webMediaPlaying = false
         setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
     }
@@ -196,10 +199,7 @@ class MainActivity : ComponentActivity() {
     fun requestWebMediaPictureInPicture(): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode) return false
         // YouTubeのPiPボタンから呼ばれる明示的なユーザー操作なので、HTML5 PiPには戻さずActivity PiPへ直行する。
-        updatePictureInPictureParams(null)
-        val entered = runCatching {
-            enterPictureInPictureMode(buildPictureInPictureParams(null))
-        }.getOrDefault(false)
+        val entered = enterInlinePictureInPicture("web_media_bridge")
         if (entered) {
             pipActivity = this
             CrashDiagnostics.record("pip_enter_requested", "source=web_media_bridge")
@@ -580,17 +580,29 @@ class MainActivity : ComponentActivity() {
             if (fullscreenVideoView != null) {
                 enterFullscreenPictureInPictureMode()
             } else {
-                // inline videoもAndroid 12+を含め、離脱時に明示的にActivity PiPへ入れる。
-                // autoEnterEnabledは補助として残すが、自動遷移だけには依存しない。
-                updatePictureInPictureParams(null)
-                val entered = runCatching {
-                    enterPictureInPictureMode(buildPictureInPictureParams(null))
-                }.getOrDefault(false)
-                if (!entered) {
-                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave")
-                }
+                // inline videoもAndroid 12+を含め、離脱時に明示的にActivity PiPへ入る。
+                // autoEnterEnabledだけに依存せず、ホームジェスチャーのcallbackで即時に要求する。
+                enterInlinePictureInPicture("inline_video_on_user_leave")
             }
         }
+    }
+
+    /** 全画面Viewを持たない通常WebView動画をActivity PiPへ移行する共通入口。 */
+    private fun enterInlinePictureInPicture(source: String): Boolean {
+        if (!supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
+        pictureInPictureTransitionRequested = true
+        updatePictureInPictureParams(null)
+        val entered = runCatching {
+            enterPictureInPictureMode(buildPictureInPictureParams(null))
+        }.getOrDefault(false)
+        if (entered) {
+            pipActivity = this
+            CrashDiagnostics.record("pip_enter_requested", "source=$source")
+        } else {
+            pictureInPictureTransitionRequested = false
+            CrashDiagnostics.record("pip_enter_failed", "source=$source")
+        }
+        return entered
     }
 
     override fun onResume() {
