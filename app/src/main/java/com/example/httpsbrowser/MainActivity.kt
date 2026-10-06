@@ -547,8 +547,6 @@ class MainActivity : ComponentActivity() {
             fullscreenVideoView?.let(::enterPictureInPictureFromPendingRequest)
         }
         // WebView.onPause() は呼ばず、バックグラウンド再生用のCPU維持だけを確保する。
-        acquireWakeLockIfNeeded()
-        requestAudioFocusIfNeeded()
     }
 
     @Suppress("DEPRECATION")
