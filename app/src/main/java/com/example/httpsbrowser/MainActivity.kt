@@ -26,6 +26,10 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.media.session.MediaButtonReceiver
+import androidx.media.session.MediaSessionCompat
+import androidx.media.session.PlaybackStateCompat
+import android.support.v4.media.MediaMetadataCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -47,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
+    private var mediaSession: MediaSessionCompat? = null
+    @Volatile private var webVideoPlaying = false
     private var incomingUrl by mutableStateOf<String?>(null)
     private lateinit var appRoot: FrameLayout
     /** 通常ページをComposeのAndroidViewから分離して保持する、選択タブ専用のnative host。 */
@@ -93,6 +99,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         activeActivity = this
         incomingUrl = httpsViewUrl(intent)
+        initializeMediaSession()
 
         // custom viewはComposeのAndroidViewに重ねず、Fulgurisと同じくActivityのnative rootへ追加する。
         // これにより動画surfaceの親・測定サイズがCompose再構成で変わらない。
@@ -141,6 +148,64 @@ class MainActivity : ComponentActivity() {
         ))
         setContentView(appRoot)
         ViewCompat.requestApplyInsets(appRoot)
+    }
+
+    private fun initializeMediaSession() {
+        if (mediaSession != null) return
+        mediaSession = MediaSessionCompat(this, "neco-browser").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() {
+                    setWebMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
+                }
+                override fun onPause() {
+                    setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
+                }
+                override fun onStop() {
+                    setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
+                }
+            })
+            setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
+            isActive = true
+            setWebMediaSessionState(PlaybackStateCompat.STATE_NONE)
+        }
+    }
+
+    /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
+    fun onWebVideoPlay(title: String?, url: String?) {
+        webVideoPlaying = true
+        mediaSession?.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title?.ifBlank { "動画" } ?: "動画")
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_URI, url.orEmpty())
+                .build()
+        )
+        setWebMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
+    }
+
+    fun onWebVideoPause() {
+        webVideoPlaying = false
+        setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
+    }
+
+    fun onWebVideoEnded() {
+        webVideoPlaying = false
+        setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
+    }
+
+    private fun setWebMediaSessionState(state: Int) {
+        val actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_STOP
+        mediaSession?.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(actions)
+                .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+                .build()
+        )
     }
 
     /**
@@ -594,6 +659,9 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         releaseWakeLockIfNeeded()
         abandonAudioFocusIfNeeded()
+        mediaSession?.isActive = false
+        mediaSession?.release()
+        mediaSession = null
         fullscreenVideoView?.removeOnLayoutChangeListener(pipHintLayoutListener)
         fullscreenVideoView = null
         fullscreenContainer = null
