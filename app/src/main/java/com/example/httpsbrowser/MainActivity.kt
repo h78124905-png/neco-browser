@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
     private var mediaSession: MediaSessionCompat? = null
+    private var mediaPlaybackServiceStarted = false
     @Volatile private var webVideoPlaying = false
     private var incomingUrl by mutableStateOf<String?>(null)
     private lateinit var appRoot: FrameLayout
@@ -99,6 +100,7 @@ class MainActivity : ComponentActivity() {
         activeActivity = this
         incomingUrl = httpsViewUrl(intent)
         initializeMediaSession()
+        ensureMediaPlaybackService()
 
         // custom viewはComposeのAndroidViewに重ねず、Fulgurisと同じくActivityのnative rootへ追加する。
         // これにより動画surfaceの親・測定サイズがCompose再構成で変わらない。
@@ -147,6 +149,17 @@ class MainActivity : ComponentActivity() {
         ))
         setContentView(appRoot)
         ViewCompat.requestApplyInsets(appRoot)
+    }
+
+    private fun ensureMediaPlaybackService() {
+        if (mediaPlaybackServiceStarted) return
+        val intent = Intent(this, MediaPlaybackService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        mediaPlaybackServiceStarted = true
     }
 
     private fun initializeMediaSession() {
@@ -661,6 +674,8 @@ class MainActivity : ComponentActivity() {
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
+        stopService(Intent(this, MediaPlaybackService::class.java))
+        mediaPlaybackServiceStarted = false
         fullscreenVideoView?.removeOnLayoutChangeListener(pipHintLayoutListener)
         fullscreenVideoView = null
         fullscreenContainer = null
