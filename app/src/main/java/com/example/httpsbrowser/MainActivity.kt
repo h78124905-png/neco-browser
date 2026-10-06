@@ -738,7 +738,7 @@ class MainActivity : ComponentActivity() {
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
                     builder.setAspectRatio(Rational(
                         aspectWidth,
-                        pipHeight.roundToInt().coerceAtLeast(1)
+                        aspectHeight
                     ))
                 }
                 builder.setSourceRectHint(videoBounds)
