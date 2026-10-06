@@ -712,14 +712,28 @@ class MainActivity : ComponentActivity() {
             val videoBounds = videoControlsTabId?.let(videoBoundsByTab::get)
             val fallbackBounds = Rect()
             if (videoBounds != null && videoBounds.width() > 0 && videoBounds.height() > 0) {
-                builder.setSourceRectHint(videoBounds)
+                // 動画の左右幅はそのまま使い、縦方向だけ約11.1%広げる。
+                // 9:16の動画なら、PiP基準は9:17.78相当となる。
+                // sourceRectHintはPiPの実際のクロップではなく、遷移元領域のヒントとして使う。
                 val dimensions = videoControlsTabId?.let(videoDimensionsByTab::get)
                 val aspectWidth = dimensions?.width ?: videoBounds.width()
                 val aspectHeight = dimensions?.height ?: videoBounds.height()
-                val ratio = aspectWidth.toFloat() / aspectHeight.toFloat()
+                val pipHeight = aspectHeight * 10f / 9f
+                val ratio = aspectWidth.toFloat() / pipHeight
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
-                    builder.setAspectRatio(Rational(aspectWidth, aspectHeight))
+                    builder.setAspectRatio(Rational(
+                        aspectWidth,
+                        pipHeight.roundToInt().coerceAtLeast(1)
+                    ))
                 }
+                val extraHeight = (videoBounds.height() * (10f / 9f - 1f) / 2f).roundToInt()
+                val expandedBounds = Rect(
+                    videoBounds.left,
+                    videoBounds.top - extraHeight,
+                    videoBounds.right,
+                    videoBounds.bottom + extraHeight
+                )
+                builder.setSourceRectHint(expandedBounds)
             } else if (normalWebContentHost.getGlobalVisibleRect(fallbackBounds) &&
                 fallbackBounds.width() > 0 && fallbackBounds.height() > 0) {
                 builder.setSourceRectHint(fallbackBounds)
