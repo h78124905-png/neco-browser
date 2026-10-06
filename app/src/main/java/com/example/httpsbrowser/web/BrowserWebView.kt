@@ -380,7 +380,7 @@ class BrowserWebViewRegistry(
                 style.textContent=
                   'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}' +
                   '*{visibility:hidden!important;}' +
-                  '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;}' +
+                  '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important;transform:none!important;}' +
                   '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
                 (document.head||document.documentElement).appendChild(style);
 
