@@ -70,6 +70,8 @@ class MainActivity : ComponentActivity() {
     private var videoSpeedIndex = 0
     private var videoSpeedRate = 1.0f
     private var videoSpeedButton: TextView? = null
+    private var videoPlayPauseButton: TextView? = null
+    private val videoBoundsByTab = ConcurrentHashMap<String, Rect>()
     private var onVideoSpeedChanged: ((Float) -> Unit)? = null
     private var videoControlsRegistry: BrowserWebViewRegistry? = null
     private var videoControlsTabId: String? = null
@@ -168,6 +170,7 @@ class MainActivity : ComponentActivity() {
     /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
     fun onWebMediaPlay(title: String?, url: String?) {
         webMediaPlaying = true
+        videoPlayPauseButton?.text = "Ⅱ"
         // 通常再生ではfullscreenVideoViewが存在しないため、PiP条件を明示的に更新する。
         // Android 12+はこのauto-enter設定を離脱直前に参照して自動でPiPへ移行する。
         updatePictureInPictureParams(null)
@@ -185,11 +188,13 @@ class MainActivity : ComponentActivity() {
         // PiP移行中に再生状態をfalseへ戻すと、通常再生PiPの条件を失うため保持する。
         if (pictureInPictureTransitionRequested) return
         webMediaPlaying = false
+        videoPlayPauseButton?.text = "▶"
         setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
     }
 
     fun onWebMediaEnded() {
         webMediaPlaying = false
+        videoPlayPauseButton?.text = "▶"
         setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
     }
 
@@ -421,7 +426,19 @@ class MainActivity : ComponentActivity() {
         if (tabId.isBlank() || width <= 0 || height <= 0) return
         val dimensions = VideoDimensions(width, height)
         if (videoDimensionsByTab.put(tabId, dimensions) == dimensions) return
-        if (fullscreenVideoTabId == tabId) updatePictureInPictureParams(fullscreenVideoView)
+        if (fullscreenVideoTabId == tabId || videoControlsTabId == tabId) {
+            updatePictureInPictureParams(if (fullscreenVideoTabId == tabId) fullscreenVideoView else null)
+        }
+    }
+
+    fun updatePictureInPictureVideoBounds(tabId: String, left: Int, top: Int, right: Int, bottom: Int) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread { updatePictureInPictureVideoBounds(tabId, left, top, right, bottom) }
+            return
+        }
+        if (tabId.isBlank() || right <= left || bottom <= top) return
+        videoBoundsByTab[tabId] = Rect(left, top, right, bottom)
+        if (videoControlsTabId == tabId && fullscreenVideoView == null) updatePictureInPictureParams(null)
     }
 
     /** 全画面custom viewが存在する間だけPiPへ移行できる。 */
@@ -480,8 +497,14 @@ class MainActivity : ComponentActivity() {
         controls.bringToFront()
     }
 
+    private fun isYoutubeHost(url: String): Boolean {
+        val host = runCatching { java.net.URI(url).host?.lowercase(Locale.ROOT)?.removePrefix("www.") }.getOrNull() ?: return false
+        return host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be"
+    }
+
     private fun isAllowedVideoControlHost(url: String, allowedHosts: List<String>): Boolean {
         val host = runCatching { java.net.URI(url).host?.lowercase(Locale.ROOT)?.removePrefix("www.") }.getOrNull() ?: return false
+        if (isYoutubeHost(url)) return true
         return allowedHosts.any { configured ->
             val normalized = configured.trim().lowercase(Locale.ROOT)
                 .removePrefix("https://").removePrefix("http://").removePrefix("www.").substringBefore('/')
@@ -491,9 +514,34 @@ class MainActivity : ComponentActivity() {
 
     private fun createVideoControlsContainer(): FrameLayout = FrameLayout(this).apply {
         minimumWidth = (52 * resources.displayMetrics.density).toInt()
-        minimumHeight = (168 * resources.displayMetrics.density).toInt()
+        minimumHeight = (224 * resources.displayMetrics.density).toInt()
         val pip = createPipButton()
         addView(pip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val playPause = TextView(this@MainActivity).apply {
+            text = if (webMediaPlaying) "Ⅱ" else "▶"
+            contentDescription = "再生/一時停止"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(8, 14, 8, 14)
+            minimumWidth = (44 * resources.displayMetrics.density).toInt()
+            minimumHeight = (52 * resources.displayMetrics.density).toInt()
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 40f
+                setColor(0xC20D1118.toInt())
+                setStroke(1, 0x88FFFFFF.toInt())
+            }
+            setOnClickListener {
+                videoControlsRegistry?.let { registry ->
+                    videoControlsTabId?.let { id -> registry.toggleVideoPlayback(id) }
+                }
+            }
+        }
+        videoPlayPauseButton = playPause
+        addView(playPause, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = (56 * resources.displayMetrics.density).toInt()
+        })
         val speed = TextView(this@MainActivity).apply {
             text = "×${videoSpeedRate}"
             contentDescription = "再生速度を変更"
@@ -690,14 +738,20 @@ class MainActivity : ComponentActivity() {
         // 描画領域として16:9を明示する。実映像が取れる場合は下で上書きする。
         builder.setAspectRatio(Rational(16, 9))
         if (videoView == null && ::normalWebContentHost.isInitialized) {
-            val bounds = Rect()
-            if (normalWebContentHost.getGlobalVisibleRect(bounds) &&
-                bounds.width() > 0 && bounds.height() > 0) {
-                builder.setSourceRectHint(bounds)
-                val ratio = bounds.width().toFloat() / bounds.height().toFloat()
+            val videoBounds = videoControlsTabId?.let(videoBoundsByTab::get)
+            val fallbackBounds = Rect()
+            if (videoBounds != null && videoBounds.width() > 0 && videoBounds.height() > 0) {
+                builder.setSourceRectHint(videoBounds)
+                val dimensions = videoControlsTabId?.let(videoDimensionsByTab::get)
+                val aspectWidth = dimensions?.width ?: videoBounds.width()
+                val aspectHeight = dimensions?.height ?: videoBounds.height()
+                val ratio = aspectWidth.toFloat() / aspectHeight.toFloat()
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
-                    builder.setAspectRatio(Rational(bounds.width(), bounds.height()))
+                    builder.setAspectRatio(Rational(aspectWidth, aspectHeight))
                 }
+            } else if (normalWebContentHost.getGlobalVisibleRect(fallbackBounds) &&
+                fallbackBounds.width() > 0 && fallbackBounds.height() > 0) {
+                builder.setSourceRectHint(fallbackBounds)
             }
         }
         videoView?.let { view ->
