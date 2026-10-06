@@ -78,6 +78,12 @@ class MainActivity : ComponentActivity() {
     private var videoControlsAllowedHosts: List<String> = emptyList()
     private var videoControlsInitialRate: Float = 1.0f
     private var pictureInPictureActive by mutableStateOf(false)
+    private var inlinePipCropActive = false
+    private var inlinePipOriginalHostLayoutParams: FrameLayout.LayoutParams? = null
+    private var inlinePipOriginalWebViewTranslationX = 0f
+    private var inlinePipOriginalWebViewTranslationY = 0f
+    private var inlinePipOriginalWebViewScaleX = 1f
+    private var inlinePipOriginalWebViewScaleY = 1f
     @Volatile private var pictureInPictureTransitionRequested = false
 
     // custom viewは全画面・PiP遷移で座標が変わる。sourceRectHintを追従させる。
@@ -437,6 +443,62 @@ class MainActivity : ComponentActivity() {
         if (videoControlsTabId == tabId && fullscreenVideoView == null) updatePictureInPictureParams(null)
     }
 
+    /**
+     * inline PiPではWebView全体をそのまま縮小せず、現在の動画矩形がActivity領域を
+     * 埋めるようにWebViewを拡大・移動する。WebView自体は再親子化しない。
+     */
+    private fun prepareInlinePipCrop(): Boolean {
+        if (inlinePipCropActive || fullscreenVideoView != null || !::normalWebContentHost.isInitialized) return inlinePipCropActive
+        val tabId = videoControlsTabId ?: return false
+        val videoBounds = videoBoundsByTab[tabId] ?: return false
+        val webView = normalWebContentHost.getChildAt(0) ?: return false
+        if (normalWebContentHost.width <= 0 || normalWebContentHost.height <= 0) return false
+
+        val location = IntArray(2)
+        normalWebContentHost.getLocationOnScreen(location)
+        val hostRect = Rect(location[0], location[1],
+            location[0] + normalWebContentHost.width,
+            location[1] + normalWebContentHost.height)
+        val crop = Rect(videoBounds)
+        if (!crop.intersect(hostRect) || crop.width() <= 0 || crop.height() <= 0) return false
+
+        val localLeft = crop.left - location[0]
+        val localTop = crop.top - location[1]
+        val scaleX = normalWebContentHost.width.toFloat() / crop.width().toFloat()
+        val scaleY = normalWebContentHost.height.toFloat() / crop.height().toFloat()
+        if (!scaleX.isFinite() || !scaleY.isFinite() || scaleX <= 0f || scaleY <= 0f) return false
+
+        inlinePipOriginalHostLayoutParams = normalWebContentHost.layoutParams?.let { FrameLayout.LayoutParams(it) }
+        inlinePipOriginalWebViewTranslationX = webView.translationX
+        inlinePipOriginalWebViewTranslationY = webView.translationY
+        inlinePipOriginalWebViewScaleX = webView.scaleX
+        inlinePipOriginalWebViewScaleY = webView.scaleY
+
+        webView.translationX = -localLeft * scaleX
+        webView.translationY = -localTop * scaleY
+        webView.scaleX = webView.scaleX * scaleX
+        webView.scaleY = webView.scaleY * scaleY
+        inlinePipCropActive = true
+        CrashDiagnostics.record("pip_inline_crop_prepared",
+            "tab=" + tabId + " video=" + crop.width() + "x" + crop.height() + " scale=" + scaleX + "x" + scaleY)
+        return true
+    }
+
+    private fun restoreInlinePipCrop() {
+        if (!inlinePipCropActive) return
+        val webView = normalWebContentHost.getChildAt(0)
+        if (webView != null) {
+            webView.translationX = inlinePipOriginalWebViewTranslationX
+            webView.translationY = inlinePipOriginalWebViewTranslationY
+            webView.scaleX = inlinePipOriginalWebViewScaleX
+            webView.scaleY = inlinePipOriginalWebViewScaleY
+        }
+        inlinePipOriginalHostLayoutParams?.let { normalWebContentHost.layoutParams = it }
+        inlinePipOriginalHostLayoutParams = null
+        inlinePipCropActive = false
+        CrashDiagnostics.record("pip_inline_crop_restored", "tab=" + videoControlsTabId)
+    }
+
     /** 全画面custom viewが存在する間だけPiPへ移行できる。 */
     fun setFullscreenVideoForPictureInPicture(view: View?) {
         val previousView = fullscreenVideoView
@@ -635,6 +697,7 @@ class MainActivity : ComponentActivity() {
     /** 全画面Viewを持たない通常WebView動画をActivity PiPへ移行する共通入口。 */
     private fun enterInlinePictureInPicture(source: String): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
+        prepareInlinePipCrop()
         pictureInPictureTransitionRequested = true
         updatePictureInPictureParams(null)
         val entered = runCatching {
@@ -645,6 +708,7 @@ class MainActivity : ComponentActivity() {
             CrashDiagnostics.record("pip_enter_requested", "source=$source")
         } else {
             pictureInPictureTransitionRequested = false
+            restoreInlinePipCrop()
             CrashDiagnostics.record("pip_enter_failed", "source=$source")
         }
         return entered
@@ -665,8 +729,9 @@ class MainActivity : ComponentActivity() {
         videoControlsContainer?.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
         if (isInPictureInPictureMode) {
             if (::composeOverlayView.isInitialized) composeOverlayView.visibility = View.GONE
-        } else if (fullscreenContainer == null && ::composeOverlayView.isInitialized) {
-            composeOverlayView.visibility = View.VISIBLE
+        } else {
+            restoreInlinePipCrop()
+            if (fullscreenContainer == null && ::composeOverlayView.isInitialized) composeOverlayView.visibility = View.VISIBLE
         }
         CrashDiagnostics.record(
             if (isInPictureInPictureMode) "pip_entered" else "pip_exited",
@@ -679,6 +744,7 @@ class MainActivity : ComponentActivity() {
         mediaSession?.release()
         mediaSession = null
         fullscreenVideoView?.removeOnLayoutChangeListener(pipHintLayoutListener)
+        restoreInlinePipCrop()
         fullscreenVideoView = null
         fullscreenContainer = null
         if (::normalWebContentHost.isInitialized) normalWebContentHost.removeAllViews()
