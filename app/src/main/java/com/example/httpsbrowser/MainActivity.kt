@@ -168,6 +168,9 @@ class MainActivity : ComponentActivity() {
     /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
     fun onWebMediaPlay(title: String?, url: String?) {
         webMediaPlaying = true
+        // 通常再生ではfullscreenVideoViewが存在しないため、PiP条件を明示的に更新する。
+        // Android 12+はこのauto-enter設定を離脱直前に参照して自動でPiPへ移行する。
+        updatePictureInPictureParams(null)
         mediaSession?.setMetadata(
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title?.ifBlank { "動画" } ?: "動画")
@@ -642,6 +645,9 @@ class MainActivity : ComponentActivity() {
 
     private fun buildPictureInPictureParams(videoView: View?): PictureInPictureParams {
         val builder = PictureInPictureParams.Builder()
+        // inline再生では動画のnative fullscreen Viewが存在しないため、PIPの最低限の
+        // 描画領域として16:9を明示する。実映像が取れる場合は下で上書きする。
+        builder.setAspectRatio(Rational(16, 9))
         videoView?.let { view ->
             val bounds = Rect()
             if (view.getGlobalVisibleRect(bounds) && bounds.width() > 0 && bounds.height() > 0) {
@@ -653,8 +659,6 @@ class MainActivity : ComponentActivity() {
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
                     builder.setAspectRatio(Rational(aspectWidth, aspectHeight))
                 }
-            } else {
-                builder.setAspectRatio(Rational(16, 9))
             }
         }
         // PiPは標準RemoteActionで、左から10秒戻し・再生/停止・10秒送りを表示する。
