@@ -321,7 +321,7 @@ class BrowserWebViewRegistry(
     fun seekVideo(tabId: String, seconds: Int) {
         val safeSeconds = seconds.coerceIn(-60, 60)
         entries[tabId]?.webView?.evaluateJavascript(
-            "document.querySelectorAll('video,audio').forEach(function(v){v.currentTime=Math.max(0,Math.min(v.duration||Infinity,v.currentTime+$safeSeconds));});",
+            "document.querySelectorAll('video').forEach(function(v){v.currentTime=Math.max(0,Math.min(v.duration||Infinity,v.currentTime+$safeSeconds));});",
             null
         )
     }
@@ -331,7 +331,7 @@ class BrowserWebViewRegistry(
         entries[tabId]?.webView?.evaluateJavascript(
             """
             (function(){
-              var media = Array.from(document.querySelectorAll('video,audio'));
+              var media = Array.from(document.querySelectorAll('video'));
               var active = media.find(function(v){ return !v.paused && !v.ended; }) || media[0];
               if (!active) return;
               if (active.paused || active.ended) {
@@ -1436,6 +1436,36 @@ class BrowserWebViewRegistry(
                   }
                 }catch(_e){}
                 return false;
+              }
+              // YouTubeのHTML5 PiP APIだけに依存しない。プレーヤーのPiPボタン自体をcapture段階で捕捉し、Android Activity PiPへ直接渡す。
+              function isPictureInPictureButton(node){
+                if(!node || !node.closest) return false;
+                return !!node.closest(
+                  '.ytp-pip-button,' +
+                  'button[aria-label*="Picture-in-picture"],' +
+                  'button[aria-label*="picture-in-picture"],' +
+                  'button[aria-label*="ピクチャー イン ピクチャー"],' +
+                  'button[aria-label*="ピクチャーインピクチャー"],' +
+                  'button[data-tooltip-text*="Picture-in-picture"],' +
+                  'button[data-tooltip-text*="ピクチャー"]'
+                );
+              }
+              if(!window.__nekoBrowserDirectPipButtonBridge){
+                document.addEventListener('click',function(event){
+                  if(!isPictureInPictureButton(event.target)) return;
+                  if(bridgePictureInPicture()){
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                  }
+                },true);
+                document.addEventListener('pointerup',function(event){
+                  if(!isPictureInPictureButton(event.target)) return;
+                  if(bridgePictureInPicture()){
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                  }
+                },true);
+                window.__nekoBrowserDirectPipButtonBridge=true;
               }
               try{
                 var originalRequestPictureInPicture = HTMLVideoElement.prototype.requestPictureInPicture;
