@@ -464,6 +464,35 @@ class BrowserWebViewRegistry(
                 }
             }
         }, VIDEO_DIMENSIONS_BRIDGE_NAME)
+        // inline videoのDOM表示矩形をAndroid側へ通知する。解像度とは別に、現在画面に見えている領域を追跡する。
+        addJavascriptInterface(object {
+            @JavascriptInterface
+            fun report(left: Int, top: Int, width: Int, height: Int, viewportWidth: Int, viewportHeight: Int) {
+                if (width <= 0 || height <= 0 || viewportWidth <= 0 || viewportHeight <= 0) return
+                val scaleX = this@createWebView.width.toFloat() / viewportWidth.toFloat()
+                val scaleY = this@createWebView.height.toFloat() / viewportHeight.toFloat()
+                if (scaleX <= 0f || scaleY <= 0f) return
+                val location = IntArray(2)
+                this@createWebView.getLocationOnScreen(location)
+                val localLeft = kotlin.math.round(left * scaleX).toInt()
+                val localTop = kotlin.math.round(top * scaleY).toInt()
+                val localRight = kotlin.math.round((left + width) * scaleX).toInt()
+                val localBottom = kotlin.math.round((top + height) * scaleY).toInt()
+                val clippedLeft = localLeft.coerceIn(0, this@createWebView.width)
+                val clippedTop = localTop.coerceIn(0, this@createWebView.height)
+                val clippedRight = localRight.coerceIn(0, this@createWebView.width)
+                val clippedBottom = localBottom.coerceIn(0, this@createWebView.height)
+                if (clippedRight > clippedLeft && clippedBottom > clippedTop) {
+                    entries[tabId]?.callbacks?.onVideoBounds(
+                        tabId,
+                        location[0] + clippedLeft,
+                        location[1] + clippedTop,
+                        location[0] + clippedRight,
+                        location[1] + clippedBottom
+                    )
+                }
+            }
+        }, VIDEO_BOUNDS_BRIDGE_NAME)
         // HTML5 video/audioの再生状態をAndroid MediaSessionへ通知する。ActivityはWeakReferenceで保持し、
         // WebViewRegistryからActivityへの強参照を作らない。任意のJava/Kotlin APIは公開しない。
         addJavascriptInterface(object {
@@ -1267,6 +1296,7 @@ class BrowserWebViewRegistry(
     private companion object {
         const val ABOUT_BLANK_URL = "about:blank"
         const val VIDEO_DIMENSIONS_BRIDGE_NAME = "NekoBrowserVideoDimensions"
+        const val VIDEO_BOUNDS_BRIDGE_NAME = "NekoBrowserVideoBounds"
         const val VIDEO_MEDIA_BRIDGE_NAME = "NekoMediaBridge"
         const val MAX_STATIC_COSMETIC_SELECTORS = 500
         const val MAX_AGGRESSIVE_YOUTUBE_SELECTORS = 2_000
@@ -1383,17 +1413,40 @@ class BrowserWebViewRegistry(
                 var video=bestVideo();
                 if(!video || !video.videoWidth || !video.videoHeight) return;
                 var value=video.videoWidth+'x'+video.videoHeight;
-                if(value===last) return;
-                last=value;
-                try{window.NekoBrowserVideoDimensions.report(video.videoWidth,video.videoHeight);}catch(_e){}
+                if(value!==last){
+                  last=value;
+                  try{window.NekoBrowserVideoDimensions.report(video.videoWidth,video.videoHeight);}catch(_e){}
+                }
+                try{
+                  var rect=video.getBoundingClientRect();
+                  var root=document.documentElement||document.body;
+                  var vw=Math.max(1,window.innerWidth||root.clientWidth||1);
+                  var vh=Math.max(1,window.innerHeight||root.clientHeight||1);
+                  if(rect.width>0 && rect.height>0){
+                    window.NekoBrowserVideoBounds.report(
+                      Math.round(rect.left),
+                      Math.round(rect.top),
+                      Math.round(rect.width),
+                      Math.round(rect.height),
+                      Math.round(vw),
+                      Math.round(vh)
+                    );
+                  }
+                }catch(_e){}
               }
               function track(video){
                 if(!video || video.__nekoBrowserDimensionsTracked) return;
                 video.__nekoBrowserDimensionsTracked=true;
-                ['loadedmetadata','resize','playing','loadeddata'].forEach(function(name){video.addEventListener(name,report,{passive:true});});
+                ['loadedmetadata','resize','playing','loadeddata','canplay'].forEach(function(name){video.addEventListener(name,report,{passive:true});});
               }
               function scan(){document.querySelectorAll('video').forEach(track);report();}
               scan();
+              window.addEventListener('resize',report,{passive:true});
+              window.addEventListener('scroll',report,{passive:true,capture:true});
+              if(window.visualViewport){
+                visualViewport.addEventListener('resize',report,{passive:true});
+                visualViewport.addEventListener('scroll',report,{passive:true});
+              }
               new MutationObserver(scan).observe(document.documentElement||document,{subtree:true,childList:true});
             })();
         """.trimIndent()
@@ -1616,6 +1669,7 @@ interface BrowserWebCallbacks {
     fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
     fun onHideFullscreen()
     fun onVideoDimensions(tabId: String, width: Int, height: Int)
+    fun onVideoBounds(tabId: String, left: Int, top: Int, right: Int, bottom: Int)
     fun onWebPermissionRequest(origin: String, resources: Set<String>, reply: (Boolean) -> Unit)
     fun onGeolocationPermission(origin: String, reply: (Boolean) -> Unit)
     fun onPopupRequested(): String?
@@ -1642,6 +1696,7 @@ interface BrowserWebCallbacks {
         override fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) = Unit
         override fun onHideFullscreen() = Unit
         override fun onVideoDimensions(tabId: String, width: Int, height: Int) = Unit
+        override fun onVideoBounds(tabId: String, left: Int, top: Int, right: Int, bottom: Int) = Unit
         override fun onWebPermissionRequest(origin: String, resources: Set<String>, reply: (Boolean) -> Unit) = reply(false)
         override fun onGeolocationPermission(origin: String, reply: (Boolean) -> Unit) = reply(false)
         override fun onPopupRequested(): String? = null
