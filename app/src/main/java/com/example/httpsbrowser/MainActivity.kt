@@ -190,6 +190,25 @@ class MainActivity : ComponentActivity() {
         setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
     }
 
+    /**
+     * YouTube等のWebView内PiPボタンから呼ばれるinline動画用のネイティブPiP入口。
+     */
+    fun requestWebMediaPictureInPicture(): Boolean {
+        if (!supportsPictureInPicture() || isInPictureInPictureMode) return false
+        webMediaPlaying = true
+        updatePictureInPictureParams(null)
+        val entered = runCatching {
+            enterPictureInPictureMode(buildPictureInPictureParams(null))
+        }.getOrDefault(false)
+        if (entered) {
+            pipActivity = this
+            CrashDiagnostics.record("pip_enter_requested", "source=web_media_bridge")
+        } else {
+            CrashDiagnostics.record("pip_enter_failed", "source=web_media_bridge")
+        }
+        return entered
+    }
+
     private fun setWebMediaSessionState(state: Int) {
         val actions = PlaybackStateCompat.ACTION_PLAY or
             PlaybackStateCompat.ACTION_PAUSE or
@@ -560,14 +579,13 @@ class MainActivity : ComponentActivity() {
         if (webMediaPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
             if (fullscreenVideoView != null) {
                 enterFullscreenPictureInPictureMode()
-            } else {
-                pictureInPictureTransitionRequested = true
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                // Android 12以降はsetAutoEnterEnabled(true)に任せる。
                 val entered = runCatching {
                     enterPictureInPictureMode(buildPictureInPictureParams(null))
                 }.getOrDefault(false)
                 if (!entered) {
-                    pictureInPictureTransitionRequested = false
-                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave")
+                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave_pre_s")
                 }
             }
         }
@@ -648,6 +666,17 @@ class MainActivity : ComponentActivity() {
         // inline再生では動画のnative fullscreen Viewが存在しないため、PIPの最低限の
         // 描画領域として16:9を明示する。実映像が取れる場合は下で上書きする。
         builder.setAspectRatio(Rational(16, 9))
+        if (videoView == null && ::normalWebContentHost.isInitialized) {
+            val bounds = Rect()
+            if (normalWebContentHost.getGlobalVisibleRect(bounds) &&
+                bounds.width() > 0 && bounds.height() > 0) {
+                builder.setSourceRectHint(bounds)
+                val ratio = bounds.width().toFloat() / bounds.height().toFloat()
+                if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
+                    builder.setAspectRatio(Rational(bounds.width(), bounds.height()))
+                }
+            }
+        }
         videoView?.let { view ->
             val bounds = Rect()
             if (view.getGlobalVisibleRect(bounds) && bounds.width() > 0 && bounds.height() > 0) {
