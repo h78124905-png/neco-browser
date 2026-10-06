@@ -73,5 +73,6 @@ dependencies {
     implementation("androidx.core:core-splashscreen:1.0.1")
     // 2.11.2はAndroid 15以降のネットワーク制約・定期work再スケジュール修正を含む。
     implementation("androidx.work:work-runtime-ktx:2.11.2")
+    implementation("androidx.media:media:1.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
