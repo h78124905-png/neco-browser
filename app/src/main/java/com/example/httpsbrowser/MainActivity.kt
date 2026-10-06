@@ -26,8 +26,8 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.media.session.MediaSessionCompat
-import androidx.media.session.PlaybackStateCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.support.v4.media.MediaMetadataCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
