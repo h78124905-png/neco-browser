@@ -553,6 +553,15 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
+    /** 通常表示の動画にも対応したPiPボタンの共通入口。 */
+    private fun enterPictureInPictureFromVideoButton(): Boolean {
+        return if (fullscreenVideoView != null) {
+            enterFullscreenPictureInPictureMode()
+        } else {
+            enterInlinePictureInPicture("video_control_button")
+        }
+    }
+
     private fun enterPictureInPictureFromPendingRequest(videoView: View) {
         val entered = runCatching { enterPictureInPictureMode(buildPictureInPictureParams(videoView)) }.getOrDefault(false)
         if (!entered) {
@@ -663,7 +672,7 @@ class MainActivity : ComponentActivity() {
             setColor(0xC20D1118.toInt())
             setStroke(1, 0x88FFFFFF.toInt())
         }
-        setOnClickListener { enterFullscreenPictureInPictureMode() }
+        setOnClickListener { enterPictureInPictureFromVideoButton() }
     }
 
     private fun supportsPictureInPicture(): Boolean =
