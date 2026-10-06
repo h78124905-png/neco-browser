@@ -171,6 +171,10 @@ object AdBlockInjector {
             const video = e.target;
             if (video.tagName !== 'VIDEO' || video.ended) return;
 
+            try {
+                if (window.NekoMediaBridge) window.NekoMediaBridge.onVideoPause();
+            } catch (_) {}
+
             const now = Date.now();
             const isRecentUserAction = (now - lastUserActionTime) < 3000;
 
@@ -195,6 +199,19 @@ object AdBlockInjector {
         document.addEventListener('play', (e) => {
             if (e.target.tagName === 'VIDEO') {
                 userIntent = null;
+                try {
+                    if (window.NekoMediaBridge) {
+                        window.NekoMediaBridge.onVideoPlay(document.title || '動画', location.href);
+                    }
+                } catch (_) {}
+            }
+        }, true);
+
+        document.addEventListener('ended', (e) => {
+            if (e.target.tagName === 'VIDEO') {
+                try {
+                    if (window.NekoMediaBridge) window.NekoMediaBridge.onVideoEnded();
+                } catch (_) {}
             }
         }, true);
 
