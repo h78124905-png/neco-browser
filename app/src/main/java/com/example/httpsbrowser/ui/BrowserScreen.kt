@@ -686,6 +686,7 @@ private fun callbacksFor(
     onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
     onHideFullscreen: () -> Unit,
     onVideoDimensions: (Int, Int) -> Unit,
+    onVideoBounds: (Int, Int, Int, Int) -> Unit,
     onPermission: (String, Set<String>, (Boolean) -> Unit) -> Unit,
     onLongPress: (String) -> Unit,
     showNotice: (String) -> Unit,
@@ -712,6 +713,7 @@ private fun callbacksFor(
     override fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) = onFullscreen(view, callback)
     override fun onHideFullscreen() = onHideFullscreen()
     override fun onVideoDimensions(tabId: String, width: Int, height: Int) = onVideoDimensions(width, height)
+    override fun onVideoBounds(tabId: String, left: Int, top: Int, right: Int, bottom: Int) = onVideoBounds(left, top, right, bottom)
     override fun onWebPermissionRequest(origin: String, resources: Set<String>, reply: (Boolean) -> Unit) = onPermission(origin, resources, reply)
     override fun onGeolocationPermission(origin: String, reply: (Boolean) -> Unit) = onPermission(origin, setOf("位置情報"), reply)
     override fun onPopupRequested(): String? = viewModel.addTab(isPrivate = viewModel.isPrivateTab(tabId)).id
