@@ -712,13 +712,15 @@ class MainActivity : ComponentActivity() {
             val videoBounds = videoControlsTabId?.let(videoBoundsByTab::get)
             val fallbackBounds = Rect()
             if (videoBounds != null && videoBounds.width() > 0 && videoBounds.height() > 0) {
-                // 動画の左右幅はそのまま使い、縦方向だけ17%広げる。
-                // 9:16の動画なら、PiP基準は9:18.72相当となる。
-                // sourceRectHintは実際の動画要素の境界をそのまま使い、左上への不要なズームを避ける。
+                // 横動画は元の縦横比を維持する。縦動画だけ、意図した17%の縦方向拡張を加える。
+                // 例: 16:9 → 16:9、9:16 → 9:18.72。
+                // 左右幅は動画表示領域を基準にし、sourceRectHintは実動画領域のまま維持して
+                // PiP遷移時の左上への不要なズームを避ける。
                 val dimensions = videoControlsTabId?.let(videoDimensionsByTab::get)
                 val aspectWidth = dimensions?.width ?: videoBounds.width()
                 val aspectHeight = dimensions?.height ?: videoBounds.height()
-                val pipHeight = aspectHeight * 1.17f
+                val isPortrait = aspectHeight > aspectWidth
+                val pipHeight = if (isPortrait) aspectHeight * 1.17f else aspectHeight.toFloat()
                 val ratio = aspectWidth.toFloat() / pipHeight
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
                     builder.setAspectRatio(Rational(
