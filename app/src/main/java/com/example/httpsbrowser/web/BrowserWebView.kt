@@ -465,23 +465,24 @@ class BrowserWebViewRegistry(
             }
         }, VIDEO_DIMENSIONS_BRIDGE_NAME)
         // inline videoのDOM表示矩形をAndroid側へ通知する。解像度とは別に、現在画面に見えている領域を追跡する。
+        val targetWebView = this
         addJavascriptInterface(object {
             @JavascriptInterface
             fun report(left: Int, top: Int, width: Int, height: Int, viewportWidth: Int, viewportHeight: Int) {
                 if (width <= 0 || height <= 0 || viewportWidth <= 0 || viewportHeight <= 0) return
-                val scaleX = this@createWebView.width.toFloat() / viewportWidth.toFloat()
-                val scaleY = this@createWebView.height.toFloat() / viewportHeight.toFloat()
+                val scaleX = targetWebView.width.toFloat() / viewportWidth.toFloat()
+                val scaleY = targetWebView.height.toFloat() / viewportHeight.toFloat()
                 if (scaleX <= 0f || scaleY <= 0f) return
                 val location = IntArray(2)
-                this@createWebView.getLocationOnScreen(location)
+                targetWebView.getLocationOnScreen(location)
                 val localLeft = kotlin.math.round(left * scaleX).toInt()
                 val localTop = kotlin.math.round(top * scaleY).toInt()
                 val localRight = kotlin.math.round((left + width) * scaleX).toInt()
                 val localBottom = kotlin.math.round((top + height) * scaleY).toInt()
-                val clippedLeft = localLeft.coerceIn(0, this@createWebView.width)
-                val clippedTop = localTop.coerceIn(0, this@createWebView.height)
-                val clippedRight = localRight.coerceIn(0, this@createWebView.width)
-                val clippedBottom = localBottom.coerceIn(0, this@createWebView.height)
+                val clippedLeft = localLeft.coerceIn(0, targetWebView.width)
+                val clippedTop = localTop.coerceIn(0, targetWebView.height)
+                val clippedRight = localRight.coerceIn(0, targetWebView.width)
+                val clippedBottom = localBottom.coerceIn(0, targetWebView.height)
                 if (clippedRight > clippedLeft && clippedBottom > clippedTop) {
                     entries[tabId]?.callbacks?.onVideoBounds(
                         tabId,
