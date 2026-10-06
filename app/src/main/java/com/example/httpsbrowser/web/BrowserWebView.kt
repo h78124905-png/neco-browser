@@ -489,6 +489,13 @@ class BrowserWebViewRegistry(
                     activityRef.get()?.onWebMediaEnded()
                 }
             }
+
+            @JavascriptInterface
+            fun requestPictureInPicture() {
+                activityRef.get()?.runOnUiThread {
+                    activityRef.get()?.requestWebMediaPictureInPicture()
+                }
+            }
         }, VIDEO_MEDIA_BRIDGE_NAME)
         installYoutubeServiceWorkerBlocker()
         webViewClient = SecureClient(tabId)
@@ -1420,6 +1427,32 @@ class BrowserWebViewRegistry(
                 try{video.removeAttribute('disablePictureInPicture');}catch(_e){}
               }
               function unlockAll(){document.querySelectorAll('video').forEach(unlock);}
+              // YouTubeのページ側PiPボタンをAndroid Activity PiPへ橋渡しする。
+              function bridgePictureInPicture(){
+                try{
+                  if(window.NekoMediaBridge && typeof window.NekoMediaBridge.requestPictureInPicture==='function'){
+                    window.NekoMediaBridge.requestPictureInPicture();
+                    return true;
+                  }
+                }catch(_e){}
+                return false;
+              }
+              try{
+                var originalRequestPictureInPicture = HTMLVideoElement.prototype.requestPictureInPicture;
+                if(typeof originalRequestPictureInPicture==='function' &&
+                   !HTMLVideoElement.prototype.__nekoBrowserPipBridge){
+                  Object.defineProperty(HTMLVideoElement.prototype,'requestPictureInPicture',{
+                    configurable:true,
+                    writable:true,
+                    value:function(){
+                      if(bridgePictureInPicture()) return Promise.resolve();
+                      return originalRequestPictureInPicture.apply(this,arguments);
+                    }
+                  });
+                  HTMLVideoElement.prototype.__nekoBrowserPipBridge=true;
+                }
+              }catch(_e){}
+
               function startVideos(){
                 unlockAll();
                 var root=document.documentElement||document;
