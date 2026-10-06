@@ -191,8 +191,8 @@ object AdBlockInjector {
             }, 400);
         }, true);
 
-        // 4. video/audio共通のメディア再生状態をAndroidへ通知する。
-        // 複数のHTMLMediaElementがあるページでも、1つでも再生中なら「メディア再生中」とする。
+        // 4. PiP対象videoの再生状態をAndroidへ通知する。
+        // 複数のvideoがあるページでも、1つでも再生中なら「video再生中」とする。audioはPiP状態に影響させない。
         const playingMedia = new Set();
 
         function notifyMediaState() {
@@ -208,7 +208,7 @@ object AdBlockInjector {
 
         document.addEventListener('play', (e) => {
             const media = e.target;
-            if (media instanceof HTMLMediaElement) {
+            if (media instanceof HTMLVideoElement) {
                 playingMedia.add(media);
                 userIntent = null;
                 notifyMediaState();
@@ -217,7 +217,7 @@ object AdBlockInjector {
 
         document.addEventListener('pause', (e) => {
             const media = e.target;
-            if (media instanceof HTMLMediaElement) {
+            if (media instanceof HTMLVideoElement) {
                 playingMedia.delete(media);
                 notifyMediaState();
             }
@@ -225,7 +225,7 @@ object AdBlockInjector {
 
         document.addEventListener('ended', (e) => {
             const media = e.target;
-            if (media instanceof HTMLMediaElement) {
+            if (media instanceof HTMLVideoElement) {
                 playingMedia.delete(media);
                 try {
                     if (window.NekoMediaBridge) {
@@ -240,7 +240,7 @@ object AdBlockInjector {
         }, true);
 
         // 既に生成済みのメディアがあるページにも対応する。
-        document.querySelectorAll('video, audio').forEach((media) => {
+        document.querySelectorAll('video').forEach((media) => {
             if (!media.paused && !media.ended) playingMedia.add(media);
         });
         notifyMediaState();
