@@ -195,25 +195,59 @@ object AdBlockInjector {
             }, 400);
         }, true);
 
-        // 4. play イベントで意図をリセット (操作時刻は保持)
+        // 4. video/audio共通のメディア再生状態をAndroidへ通知する。
+        // 複数のHTMLMediaElementがあるページでも、1つでも再生中なら「メディア再生中」とする。
+        const playingMedia = new Set();
+
+        function notifyMediaState() {
+            try {
+                if (!window.NekoMediaBridge) return;
+                if (playingMedia.size > 0) {
+                    window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
+                } else {
+                    window.NekoMediaBridge.onMediaPause();
+                }
+            } catch (_) {}
+        }
+
         document.addEventListener('play', (e) => {
-            if (e.target.tagName === 'VIDEO') {
+            const media = e.target;
+            if (media instanceof HTMLMediaElement) {
+                playingMedia.add(media);
                 userIntent = null;
+                notifyMediaState();
+            }
+        }, true);
+
+        document.addEventListener('pause', (e) => {
+            const media = e.target;
+            if (media instanceof HTMLMediaElement) {
+                playingMedia.delete(media);
+                notifyMediaState();
+            }
+        }, true);
+
+        document.addEventListener('ended', (e) => {
+            const media = e.target;
+            if (media instanceof HTMLMediaElement) {
+                playingMedia.delete(media);
                 try {
                     if (window.NekoMediaBridge) {
-                        window.NekoMediaBridge.onVideoPlay(document.title || '動画', location.href);
+                        if (playingMedia.size > 0) {
+                            window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
+                        } else {
+                            window.NekoMediaBridge.onMediaEnded();
+                        }
                     }
                 } catch (_) {}
             }
         }, true);
 
-        document.addEventListener('ended', (e) => {
-            if (e.target.tagName === 'VIDEO') {
-                try {
-                    if (window.NekoMediaBridge) window.NekoMediaBridge.onVideoEnded();
-                } catch (_) {}
-            }
-        }, true);
+        // 既に生成済みのメディアがあるページにも対応する。
+        document.querySelectorAll('video, audio').forEach((media) => {
+            if (!media.paused && !media.ended) playingMedia.add(media);
+        });
+        notifyMediaState();
 
         // 5. 保険のポーリング (状態遷移中の誤作動防止付き)
         setInterval(() => {
