@@ -321,7 +321,7 @@ class BrowserWebViewRegistry(
     fun seekVideo(tabId: String, seconds: Int) {
         val safeSeconds = seconds.coerceIn(-60, 60)
         entries[tabId]?.webView?.evaluateJavascript(
-            "document.querySelectorAll('video').forEach(function(v){v.currentTime=Math.max(0,Math.min(v.duration||Infinity,v.currentTime+$safeSeconds));});",
+            "document.querySelectorAll('video,audio').forEach(function(v){v.currentTime=Math.max(0,Math.min(v.duration||Infinity,v.currentTime+$safeSeconds));});",
             null
         )
     }
@@ -331,8 +331,8 @@ class BrowserWebViewRegistry(
         entries[tabId]?.webView?.evaluateJavascript(
             """
             (function(){
-              var videos = Array.from(document.querySelectorAll('video'));
-              var active = videos.find(function(v){ return !v.paused && !v.ended; }) || videos[0];
+              var media = Array.from(document.querySelectorAll('video,audio'));
+              var active = media.find(function(v){ return !v.paused && !v.ended; }) || media[0];
               if (!active) return;
               if (active.paused || active.ended) {
                 active.play().catch(function(){});
@@ -464,29 +464,29 @@ class BrowserWebViewRegistry(
                 }
             }
         }, VIDEO_DIMENSIONS_BRIDGE_NAME)
-        // HTML5 videoの再生状態だけをAndroid MediaSessionへ通知する。ActivityはWeakReferenceで保持し、
+        // HTML5 video/audioの再生状態をAndroid MediaSessionへ通知する。ActivityはWeakReferenceで保持し、
         // WebViewRegistryからActivityへの強参照を作らない。任意のJava/Kotlin APIは公開しない。
         addJavascriptInterface(object {
             private val activityRef = WeakReference(context as? MainActivity)
 
             @JavascriptInterface
-            fun onVideoPlay(title: String?, url: String?) {
+            fun onMediaPlay(title: String?, url: String?) {
                 activityRef.get()?.runOnUiThread {
-                    activityRef.get()?.onWebVideoPlay(title, url)
+                    activityRef.get()?.onWebMediaPlay(title, url)
                 }
             }
 
             @JavascriptInterface
-            fun onVideoPause() {
+            fun onMediaPause() {
                 activityRef.get()?.runOnUiThread {
-                    activityRef.get()?.onWebVideoPause()
+                    activityRef.get()?.onWebMediaPause()
                 }
             }
 
             @JavascriptInterface
-            fun onVideoEnded() {
+            fun onMediaEnded() {
                 activityRef.get()?.runOnUiThread {
-                    activityRef.get()?.onWebVideoEnded()
+                    activityRef.get()?.onWebMediaEnded()
                 }
             }
         }, VIDEO_MEDIA_BRIDGE_NAME)
