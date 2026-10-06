@@ -345,6 +345,83 @@ class BrowserWebViewRegistry(
         )
     }
 
+    /**
+     * Activity PiPへ入る直前だけ、ページの描画をactive video一枚へ限定する。
+     * Android Viewのscale/translationはWebView内の動画合成面へ確実に適用されないため、
+     * DOM側でviewportいっぱいに配置する。PiP終了時はstyleを丸ごと削除して元ページへ戻す。
+     */
+    fun prepareInlinePipContent(tabId: String, onReady: (Boolean) -> Unit) {
+        entries[tabId]?.webView?.evaluateJavascript(
+            """
+            (function(){
+              try {
+                var videos=Array.from(document.querySelectorAll('video'));
+                if(!videos.length) return false;
+                var active=videos.find(function(v){return !v.paused && !v.ended && v.readyState>0;}) ||
+                           videos.slice().sort(function(a,b){
+                             return (b.getBoundingClientRect().width*b.getBoundingClientRect().height) -
+                                    (a.getBoundingClientRect().width*a.getBoundingClientRect().height);
+                           })[0];
+                if(!active) return false;
+
+                var STYLE_ID='__neko_browser_inline_pip_style';
+                var old=document.getElementById(STYLE_ID);
+                if(old) old.remove();
+
+                document.querySelectorAll('[data-neko-pip-ancestor]').forEach(function(e){
+                  e.removeAttribute('data-neko-pip-ancestor');
+                });
+                document.querySelectorAll('[data-neko-pip-video]').forEach(function(e){
+                  e.removeAttribute('data-neko-pip-video');
+                });
+
+                var style=document.createElement('style');
+                style.id=STYLE_ID;
+                style.textContent=
+                  'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}' +
+                  '*{visibility:hidden!important;}' +
+                  '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;}' +
+                  '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
+                (document.head||document.documentElement).appendChild(style);
+
+                var node=active;
+                while(node && node.nodeType===1){
+                  node.setAttribute('data-neko-pip-ancestor','1');
+                  node=node.parentElement;
+                }
+                active.setAttribute('data-neko-pip-video','1');
+                window.__nekoBrowserInlinePipVideo=active;
+                return true;
+              } catch(e) {
+                return false;
+              }
+            })();
+            """.trimIndent(),
+            { result -> onReady(result == "true") }
+        ) ?: onReady(false)
+    }
+
+    fun restoreInlinePipContent(tabId: String) {
+        entries[tabId]?.webView?.evaluateJavascript(
+            """
+            (function(){
+              try{
+                var style=document.getElementById('__neko_browser_inline_pip_style');
+                if(style) style.remove();
+                document.querySelectorAll('[data-neko-pip-video]').forEach(function(e){
+                  e.removeAttribute('data-neko-pip-video');
+                });
+                document.querySelectorAll('[data-neko-pip-ancestor]').forEach(function(e){
+                  e.removeAttribute('data-neko-pip-ancestor');
+                });
+                window.__nekoBrowserInlinePipVideo=null;
+              }catch(_e){}
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
     fun seekVideo(tabId: String, seconds: Int) {
         val safeSeconds = seconds.coerceIn(-60, 60)
         entries[tabId]?.webView?.evaluateJavascript(
