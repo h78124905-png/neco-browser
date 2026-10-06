@@ -100,7 +100,6 @@ class MainActivity : ComponentActivity() {
         activeActivity = this
         incomingUrl = httpsViewUrl(intent)
         initializeMediaSession()
-        ensureMediaPlaybackService()
 
         // custom viewはComposeのAndroidViewに重ねず、Fulgurisと同じくActivityのnative rootへ追加する。
         // これにより動画surfaceの親・測定サイズがCompose再構成で変わらない。
@@ -149,17 +148,6 @@ class MainActivity : ComponentActivity() {
         ))
         setContentView(appRoot)
         ViewCompat.requestApplyInsets(appRoot)
-    }
-
-    private fun ensureMediaPlaybackService() {
-        if (mediaPlaybackServiceStarted) return
-        val intent = Intent(this, MediaPlaybackService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-        mediaPlaybackServiceStarted = true
     }
 
     private fun initializeMediaSession() {
@@ -636,11 +624,21 @@ class MainActivity : ComponentActivity() {
     @Suppress("DEPRECATION")
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Android 12以降は、事前に設定したauto-enterがジェスチャーPiPをより滑らかに開始する。
-        // ここで明示enterを重ねると、WebView custom viewの停止・再親子化と競合し黒画面化し得る。
-        // API 26〜30だけ従来の明示経路を使う。
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && fullscreenVideoView != null && !isInPictureInPictureMode) {
-            enterFullscreenPictureInPictureMode()
+        // 動画再生中にホームへ離脱したら、通常のバックグラウンド再生ではなくPiPへ移行する。
+        // Android 12+はauto-enterを併用し、API 26〜30はここから明示的に入る。
+        if (webVideoPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
+            if (fullscreenVideoView != null) {
+                enterFullscreenPictureInPictureMode()
+            } else {
+                pictureInPictureTransitionRequested = true
+                val entered = runCatching {
+                    enterPictureInPictureMode(buildPictureInPictureParams(null))
+                }.getOrDefault(false)
+                if (!entered) {
+                    pictureInPictureTransitionRequested = false
+                    CrashDiagnostics.record("pip_enter_failed", "inline_video_on_user_leave")
+                }
+            }
         }
     }
 
@@ -674,8 +672,6 @@ class MainActivity : ComponentActivity() {
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
-        stopService(Intent(this, MediaPlaybackService::class.java))
-        mediaPlaybackServiceStarted = false
         fullscreenVideoView?.removeOnLayoutChangeListener(pipHintLayoutListener)
         fullscreenVideoView = null
         fullscreenContainer = null
@@ -744,8 +740,8 @@ class MainActivity : ComponentActivity() {
             ))
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // 明示PiPの補助としてauto-enterも有効にする。通常ページではvideoViewがnullのため無効。
-            builder.setAutoEnterEnabled(videoView != null)
+            // 動画再生中はinline videoでもホーム離脱時にAndroidへPiP移行を任せる。
+            builder.setAutoEnterEnabled(webVideoPlaying || videoView != null)
             if (videoView != null) builder.setSeamlessResizeEnabled(true)
         }
         return builder.build()
