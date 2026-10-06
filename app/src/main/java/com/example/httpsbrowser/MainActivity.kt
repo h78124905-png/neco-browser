@@ -464,25 +464,36 @@ class MainActivity : ComponentActivity() {
             runOnUiThread { showVideoControls(registry, tabId, pageUrl, allowedHosts, initialRate, onPlaybackRateChanged) }
             return
         }
-        if (fullscreenContainer == null && !isAllowedVideoControlHost(pageUrl, allowedHosts)) {
+        val effectivePageUrl = registry.currentUrl(tabId) ?: pageUrl
+        if (fullscreenContainer == null && !isAllowedVideoControlHost(effectivePageUrl, allowedHosts)) {
             videoControlsContainer?.visibility = View.GONE
             return
         }
+
+        val sameVideoTarget = videoControlsContainer != null &&
+            videoControlsTabId == tabId &&
+            videoControlsRegistry === registry
+
         videoControlsRegistry = registry
         videoControlsTabId = tabId
-        videoControlsPageUrl = pageUrl
+        videoControlsPageUrl = effectivePageUrl
         videoControlsAllowedHosts = allowedHosts
-        videoControlsInitialRate = initialRate
-        videoSpeedRate = initialRate.coerceIn(1.0f, 2.0f)
-        videoSpeedIndex = VIDEO_SPEEDS.indices.minByOrNull { kotlin.math.abs(VIDEO_SPEEDS[it] - videoSpeedRate) } ?: 0
         onVideoSpeedChanged = onPlaybackRateChanged
-        // 同じActivity内の別動画・別タブにも、保存済みの速度を引き継ぐ。
-        registry.setVideoPlaybackRate(tabId, videoSpeedRate)
-        if (videoControlsContainer != null) {
+
+        if (sameVideoTarget) {
+            // 動画のresize/scroll/reload通知でここへ何度来ても、ユーザーが選んだ速度を
+            // 初期値へ戻さない。UIだけを再表示する。
             videoControlsContainer?.visibility = View.VISIBLE
             videoControlsContainer?.bringToFront()
             return
         }
+
+        videoControlsInitialRate = initialRate
+        videoSpeedRate = initialRate.coerceIn(1.0f, 2.0f)
+        videoSpeedIndex = VIDEO_SPEEDS.indices.minByOrNull { kotlin.math.abs(VIDEO_SPEEDS[it] - videoSpeedRate) } ?: 0
+        // 同じActivity内の別動画・別タブへ切り替わった時だけ、新しい動画へ保存済み速度を適用する。
+        registry.setVideoPlaybackRate(tabId, videoSpeedRate)
+
         val controls = createVideoControlsContainer()
         videoControlsContainer = controls
         appRoot.addView(controls, FrameLayout.LayoutParams(
@@ -712,16 +723,12 @@ class MainActivity : ComponentActivity() {
             val videoBounds = videoControlsTabId?.let(videoBoundsByTab::get)
             val fallbackBounds = Rect()
             if (videoBounds != null && videoBounds.width() > 0 && videoBounds.height() > 0) {
-                // 横動画は元の縦横比を維持する。縦動画だけ、意図した17%の縦方向拡張を加える。
-                // 例: 16:9 → 16:9、9:16 → 9:18.72。
-                // 左右幅は動画表示領域を基準にし、sourceRectHintは実動画領域のまま維持して
-                // PiP遷移時の左上への不要なズームを避ける。
-                val dimensions = videoControlsTabId?.let(videoDimensionsByTab::get)
-                val aspectWidth = dimensions?.width ?: videoBounds.width()
-                val aspectHeight = dimensions?.height ?: videoBounds.height()
-                val isPortrait = aspectHeight > aspectWidth
-                val pipHeight = if (isPortrait) aspectHeight * 1.17f else aspectHeight.toFloat()
-                val ratio = aspectWidth.toFloat() / pipHeight
+                // PiPの比率は「動画ファイルの解像度」ではなく、現在画面に実際に
+                // 描画されているvideo要素の矩形を使う。CSSでletterbox/cropされている
+                // YouTube等でも、PiPの表示範囲をそのまま動画領域へ合わせる。
+                val aspectWidth = videoBounds.width()
+                val aspectHeight = videoBounds.height()
+                val ratio = aspectWidth.toFloat() / aspectHeight.toFloat()
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
                     builder.setAspectRatio(Rational(
                         aspectWidth,
