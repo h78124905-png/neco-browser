@@ -1,6 +1,7 @@
 package com.example.httpsbrowser.web
 
 import java.io.ByteArrayInputStream
+import java.lang.ref.WeakReference
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -31,6 +32,7 @@ import androidx.webkit.ServiceWorkerClientCompat
 import androidx.webkit.ServiceWorkerControllerCompat
 import android.content.Intent
 import com.example.httpsbrowser.CrashDiagnostics
+import com.example.httpsbrowser.MainActivity
 import com.example.httpsbrowser.data.BrowserSettings
 import com.example.httpsbrowser.data.BrowserDownloadRequest
 import com.example.httpsbrowser.data.BrowserTab
@@ -462,6 +464,32 @@ class BrowserWebViewRegistry(
                 }
             }
         }, VIDEO_DIMENSIONS_BRIDGE_NAME)
+        // HTML5 videoの再生状態だけをAndroid MediaSessionへ通知する。ActivityはWeakReferenceで保持し、
+        // WebViewRegistryからActivityへの強参照を作らない。任意のJava/Kotlin APIは公開しない。
+        addJavascriptInterface(object {
+            private val activityRef = WeakReference(context as? MainActivity)
+
+            @JavascriptInterface
+            fun onVideoPlay(title: String?, url: String?) {
+                activityRef.get()?.runOnUiThread {
+                    activityRef.get()?.onWebVideoPlay(title, url)
+                }
+            }
+
+            @JavascriptInterface
+            fun onVideoPause() {
+                activityRef.get()?.runOnUiThread {
+                    activityRef.get()?.onWebVideoPause()
+                }
+            }
+
+            @JavascriptInterface
+            fun onVideoEnded() {
+                activityRef.get()?.runOnUiThread {
+                    activityRef.get()?.onWebVideoEnded()
+                }
+            }
+        }, VIDEO_MEDIA_BRIDGE_NAME)
         installYoutubeServiceWorkerBlocker()
         webViewClient = SecureClient(tabId)
         webChromeClient = SecureChromeClient(tabId)
@@ -1232,6 +1260,7 @@ class BrowserWebViewRegistry(
     private companion object {
         const val ABOUT_BLANK_URL = "about:blank"
         const val VIDEO_DIMENSIONS_BRIDGE_NAME = "NekoBrowserVideoDimensions"
+        const val VIDEO_MEDIA_BRIDGE_NAME = "NekoMediaBridge"
         const val MAX_STATIC_COSMETIC_SELECTORS = 500
         const val MAX_AGGRESSIVE_YOUTUBE_SELECTORS = 2_000
         const val GENERIC_COSMETIC_DELAY_MS = 350L
