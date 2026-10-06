@@ -171,10 +171,6 @@ object AdBlockInjector {
             const video = e.target;
             if (video.tagName !== 'VIDEO' || video.ended) return;
 
-            try {
-                if (window.NekoMediaBridge) window.NekoMediaBridge.onVideoPause();
-            } catch (_) {}
-
             const now = Date.now();
             const isRecentUserAction = (now - lastUserActionTime) < 3000;
 
