@@ -636,30 +636,19 @@ class MainActivity : ComponentActivity() {
     /** 全画面Viewを持たない通常WebView動画をActivity PiPへ移行する共通入口。 */
     private fun enterInlinePictureInPicture(source: String): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
-        val tabId = videoControlsTabId ?: return false
-        val registry = videoControlsRegistry ?: return false
         pictureInPictureTransitionRequested = true
-        registry.prepareInlinePipContent(tabId) { prepared ->
-            if (!prepared || !pictureInPictureTransitionRequested || isInPictureInPictureMode) {
-                pictureInPictureTransitionRequested = false
-                registry.restoreInlinePipContent(tabId)
-                CrashDiagnostics.record("pip_inline_prepare_failed", "source=$source\ttab=$tabId")
-                return@prepareInlinePipContent
-            }
-            updatePictureInPictureParams(null)
-            val entered = runCatching {
-                enterPictureInPictureMode(buildPictureInPictureParams(null))
-            }.getOrDefault(false)
-            if (entered) {
-                pipActivity = this
-                CrashDiagnostics.record("pip_enter_requested", "source=$source\tinline_content=video_only")
-            } else {
-                pictureInPictureTransitionRequested = false
-                registry.restoreInlinePipContent(tabId)
-                CrashDiagnostics.record("pip_enter_failed", "source=$source")
-            }
+        updatePictureInPictureParams(null)
+        val entered = runCatching {
+            enterPictureInPictureMode(buildPictureInPictureParams(null))
+        }.getOrDefault(false)
+        if (entered) {
+            pipActivity = this
+            CrashDiagnostics.record("pip_enter_requested", "source=$source")
+        } else {
+            pictureInPictureTransitionRequested = false
+            CrashDiagnostics.record("pip_enter_failed", "source=$source")
         }
-        return true
+        return entered
     }
 
     override fun onResume() {
