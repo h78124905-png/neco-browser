@@ -279,6 +279,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                 },
                 onVideoBounds = { left, top, right, bottom ->
                     hostActivity.updatePictureInPictureVideoBounds(tab.id, left, top, right, bottom)
+                    // 解像度通知より先に矩形だけ届く動画でも、速度指定を取りこぼさない。
+                    registry.setVideoPlaybackRate(tab.id, state.settings.videoPlaybackRate)
                     // 解像度通知が遅れる動画でも、実DOMの矩形が取れた時点で操作UIを出せる。
                     hostActivity.showVideoControls(
                         registry = registry,

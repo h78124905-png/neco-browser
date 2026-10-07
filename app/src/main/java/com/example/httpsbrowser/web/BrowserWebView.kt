@@ -337,6 +337,13 @@ class BrowserWebViewRegistry(
                   if(event.target && event.target.tagName === 'VIDEO') applyRateToVideo(event.target);
                 }, true);
 
+                // YouTubeは同じvideo要素のsrcだけを差し替えることがあるため、
+                // DOMイベントだけでは速度指定が外れる。低頻度の再適用で実動画を追従する。
+                if (window.__httpsBrowserPlaybackRateTimer) {
+                  clearInterval(window.__httpsBrowserPlaybackRateTimer);
+                }
+                window.__httpsBrowserPlaybackRateTimer = setInterval(applyAll, 400);
+
                 window.__httpsBrowserPlaybackRateObserver = observer;
               }
             })($safeRate);
