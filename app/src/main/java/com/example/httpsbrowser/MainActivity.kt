@@ -637,16 +637,41 @@ class MainActivity : ComponentActivity() {
     private fun enterInlinePictureInPicture(source: String): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
         pictureInPictureTransitionRequested = true
+        val registry = videoControlsRegistry
+        val tabId = videoControlsTabId
+
+        // WebView全体をPiPへ渡すと、端末によっては縦長WebViewが拡大されて
+        // video以外の領域や黒い余白までPiPの表示面として扱われる。開始直前だけ
+        // 再生中videoと必要な祖先要素をWebView viewportへ独立配置し、終了時に復元する。
+        if (registry != null && !tabId.isNullOrBlank()) {
+            registry.prepareInlinePipContent(tabId) { prepared ->
+                runOnUiThread {
+                    if (!pictureInPictureTransitionRequested || isInPictureInPictureMode) return@runOnUiThread
+                    updatePictureInPictureParams(null)
+                    val entered = runCatching {
+                        enterPictureInPictureMode(buildPictureInPictureParams(null))
+                    }.getOrDefault(false)
+                    if (entered) {
+                        pipActivity = this
+                        CrashDiagnostics.record("pip_enter_requested", "source=$source\nvideoIsolated=$prepared")
+                    } else {
+                        pictureInPictureTransitionRequested = false
+                        registry.restoreInlinePipContent(tabId)
+                        CrashDiagnostics.record("pip_enter_failed", "source=$source\nvideoIsolated=$prepared")
+                    }
+                }
+            }
+            return true
+        }
+
         updatePictureInPictureParams(null)
-        val entered = runCatching {
-            enterPictureInPictureMode(buildPictureInPictureParams(null))
-        }.getOrDefault(false)
+        val entered = runCatching { enterPictureInPictureMode(buildPictureInPictureParams(null)) }.getOrDefault(false)
         if (entered) {
             pipActivity = this
-            CrashDiagnostics.record("pip_enter_requested", "source=$source")
+            CrashDiagnostics.record("pip_enter_requested", "source=$source\nvideoIsolated=false")
         } else {
             pictureInPictureTransitionRequested = false
-            CrashDiagnostics.record("pip_enter_failed", "source=$source")
+            CrashDiagnostics.record("pip_enter_failed", "source=$source\nvideoIsolated=false")
         }
         return entered
     }
