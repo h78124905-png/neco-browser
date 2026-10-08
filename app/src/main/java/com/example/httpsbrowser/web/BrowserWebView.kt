@@ -299,11 +299,15 @@ class BrowserWebViewRegistry(
               function applyRateToVideo(v){
                 if(!v || v.tagName !== 'VIDEO') return;
                 try {
-                  if (Math.abs(v.defaultPlaybackRate - rate) > 0.001) {
-                    v.defaultPlaybackRate = rate;
+                  // Observer/timerは最初のrateをクロージャに保持するため、
+                  // 再生速度変更後は常に最新のグローバル値を参照する。
+                  var currentRate = window.__httpsBrowserPlaybackRate;
+                  if (typeof currentRate !== 'number') return;
+                  if (Math.abs(v.defaultPlaybackRate - currentRate) > 0.001) {
+                    v.defaultPlaybackRate = currentRate;
                   }
-                  if (Math.abs(v.playbackRate - rate) > 0.001) {
-                    v.playbackRate = rate;
+                  if (Math.abs(v.playbackRate - currentRate) > 0.001) {
+                    v.playbackRate = currentRate;
                   }
                 } catch (_) {}
               }
