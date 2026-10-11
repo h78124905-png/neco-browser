@@ -475,10 +475,12 @@ class BrowserWebViewRegistry(
      * Fullscreen APIはユーザー操作が必要なので、ページ側で1回だけタップを横取りしてrequestFullscreenを呼び、
      * Android側から本物のタッチイベントを1回送る。横取り中のタップはページへ渡さない（再生/停止が切り替わらない）。
      */
-    fun requestVideoFullscreenByTap(tabId: String) {
-        val view = entries[tabId]?.webView ?: return
+    fun requestVideoFullscreenByTap(tabId: String, onArmed: (Boolean) -> Unit = {}) {
+        val view = entries[tabId]?.webView ?: return onArmed(false)
         view.evaluateJavascript(FULLSCREEN_TAP_ARM_SCRIPT) { result ->
-            if (result?.contains("armed") != true) return@evaluateJavascript
+            val armed = result?.contains("armed") == true
+            onArmed(armed)
+            if (!armed) return@evaluateJavascript
             view.post {
                 val x = (view.width / 2f).coerceAtLeast(1f)
                 val y = (view.height / 2f).coerceAtLeast(1f)
@@ -1507,6 +1509,8 @@ class BrowserWebViewRegistry(
               try{
                 var d=document;
                 if(d.fullscreenElement||d.webkitFullscreenElement) return 'already';
+                // ショートは全画面にすると映像が消えることがあるため、通常表示のPiPに任せる
+                if(/^\/shorts\//.test(location.pathname)) return 'shorts';
                 var vids=Array.prototype.slice.call(d.querySelectorAll('video'));
                 var v=vids.find(function(x){return !x.paused&&!x.ended;})||vids[0];
                 if(!v) return 'none';
