@@ -81,6 +81,11 @@ class MainActivity : ComponentActivity() {
     private var pictureInPictureActive by mutableStateOf(false)
     @Volatile private var pictureInPictureTransitionRequested = false
     private var pipSavedHostParams: FrameLayout.LayoutParams? = null
+    // 通常表示の動画をPiPにする時は、ページ全画面を経由させる（通常表示のままだとカクつく）。
+    private var pipAwaitingFullscreen = false
+    private var pipAutoFullscreen = false
+    private var normalWebContentHidden = false
+    private var attachedNormalTabId: String? = null
     private var pipSavedRootPadding: IntArray? = null
 
     // custom viewは全画面・PiP遷移で座標が変わる。sourceRectHintを追従させる。
@@ -270,6 +275,9 @@ class MainActivity : ComponentActivity() {
     fun showNormalWebContent(registry: BrowserWebViewRegistry, tabId: String) {
         if (::normalWebContentHost.isInitialized.not()) return
         registry.attachToNativeHost(tabId, normalWebContentHost)
+        attachedNormalTabId = tabId
+        normalWebContentHidden = false
+        refreshVideoControlsVisibility()
         // Composeからページ矩形を受けるまで全画面の仮LayoutParamsを見せない。
         normalWebContentHost.visibility = if (normalWebContentBoundsReady) View.VISIBLE else View.INVISIBLE
         CrashDiagnostics.record("normal_webview_native_host_shown", "tab=$tabId")
@@ -299,6 +307,7 @@ class MainActivity : ComponentActivity() {
     fun hideNormalWebContent() {
         if (::normalWebContentHost.isInitialized.not()) return
         // 独自ホームの上に動画ボタンを浮かせない。YouTubeへ戻ればshowVideoControlsで再表示される。
+        normalWebContentHidden = true
         if (fullscreenContainer == null) videoControlsContainer?.visibility = View.GONE
         // ホーム／シークレットの新規ホームでは、直前ページのnative WebViewを保持するが
         // Composeホームを覆わない。次の通常ページ計測で前面状態を再設定する。
@@ -391,6 +400,16 @@ class MainActivity : ComponentActivity() {
         setFullscreenVideoForPictureInPicture(view)
         runCatching { view.keepScreenOn = true }
         setFullscreenSystemBars(true)
+        if (isPictureInPictureBusy()) videoControlsContainer?.visibility = View.GONE
+        if (pipAwaitingFullscreen) {
+            // PiPボタン→ページ全画面が届いたので、全画面と同じ滑らかな経路でPiPへ入る。
+            pipAwaitingFullscreen = false
+            pipAutoFullscreen = true
+            window.decorView.post { enterFullscreenPictureInPictureMode() }
+        } else if (isInPictureInPictureMode) {
+            videoControlsContainer?.visibility = View.GONE
+            updatePictureInPictureParams(view)
+        }
         CrashDiagnostics.record("fullscreen_native_container_shown", "view=${view.javaClass.name}")
     }
 
@@ -474,7 +493,40 @@ class MainActivity : ComponentActivity() {
     /** 動画を検出したタブの操作UIを通常画面へ表示する。全画面中は同じUIをcustom view側へ移す。 */
     /** PiP中・PiP移行中はページ側の矩形通知やボタン表示を反映しない。 */
     fun isPictureInPictureBusy(): Boolean =
-        isInPictureInPictureMode || pictureInPictureTransitionRequested || pipSavedHostParams != null
+        isInPictureInPictureMode || pictureInPictureTransitionRequested || pipSavedHostParams != null || pipAwaitingFullscreen
+
+    /** 操作ボタンは、PiP中は隠し、表示中のタブが動画タブの時（または全画面中）だけ出す。 */
+    private fun refreshVideoControlsVisibility() {
+        val controls = videoControlsContainer ?: return
+        if (isPictureInPictureBusy()) {
+            controls.visibility = View.GONE
+            return
+        }
+        val show = fullscreenContainer != null ||
+            (!normalWebContentHidden && videoControlsTabId != null && videoControlsTabId == attachedNormalTabId)
+        controls.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) controls.bringToFront()
+    }
+
+    /** PiPから戻った直後はWebViewが小さいサイズのまま描画されることがあるため、再レイアウトを促す。 */
+    private fun scheduleWebContentRefresh() {
+        val refresh = Runnable {
+            if (::normalWebContentHost.isInitialized) {
+                for (i in 0 until normalWebContentHost.childCount) {
+                    normalWebContentHost.getChildAt(i).apply {
+                        forceLayout()
+                        requestLayout()
+                        invalidate()
+                    }
+                }
+                normalWebContentHost.requestLayout()
+            }
+            val tabId = attachedNormalTabId ?: videoControlsTabId
+            if (tabId != null) videoControlsRegistry?.dispatchViewportResize(tabId)
+        }
+        appRoot.postDelayed(refresh, 200L)
+        appRoot.postDelayed(refresh, 800L)
+    }
 
     /** 操作UIで選んだ最新の速度。DataStore保存の反映待ちで古い速度へ戻さないために使う。 */
     fun currentVideoPlaybackRate(fallback: Float): Float =
@@ -635,8 +687,27 @@ class MainActivity : ComponentActivity() {
         return if (fullscreenVideoView != null) {
             enterFullscreenPictureInPictureMode()
         } else {
-            enterInlinePictureInPicture("video_control_button")
+            requestFullscreenThenPictureInPicture()
         }
+    }
+
+    private fun requestFullscreenThenPictureInPicture(): Boolean {
+        val registry = videoControlsRegistry
+        val tabId = videoControlsTabId
+        if (registry == null || tabId.isNullOrBlank() || !supportsPictureInPicture()) {
+            return enterInlinePictureInPicture("video_control_button")
+        }
+        pipAwaitingFullscreen = true
+        videoControlsContainer?.visibility = View.GONE
+        registry.requestVideoFullscreenByTap(tabId)
+        // 全画面にならないページでは従来の通常表示PiPへ切り替える。
+        window.decorView.postDelayed({
+            if (pipAwaitingFullscreen) {
+                pipAwaitingFullscreen = false
+                if (!enterInlinePictureInPicture("video_control_button_fallback")) refreshVideoControlsVisibility()
+            }
+        }, 900L)
+        return true
     }
 
     private fun enterPictureInPictureFromPendingRequest(videoView: View) {
@@ -719,7 +790,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!isInPictureInPictureMode) pictureInPictureTransitionRequested = false
+        if (!isInPictureInPictureMode) {
+            pictureInPictureTransitionRequested = false
+            refreshVideoControlsVisibility()
+        }
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -729,18 +803,30 @@ class MainActivity : ComponentActivity() {
         // ブラウザtaskはPiP開始前のユーザー操作中に起動済みであるため、
         // Android 16のPiP後バックグラウンド起動制限に依存しない。
         // PiP windowには動画だけを残す。操作ボタンやCompose下部バーはPiP中に合成しない。
-        videoControlsContainer?.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
+        if (isInPictureInPictureMode) videoControlsContainer?.visibility = View.GONE
         if (isInPictureInPictureMode) {
             if (::composeOverlayView.isInitialized) composeOverlayView.visibility = View.GONE
             if (fullscreenContainer == null) {
                 expandWebContentForPip()
                 // Android 12+の自動PiPでは事前準備のJSが間に合わないことがあるため、ここでも動画だけにする。
-                videoControlsTabId?.let { tabId -> videoControlsRegistry?.prepareInlinePipContent(tabId) { } }
+                videoControlsTabId?.let { tabId ->
+                    videoControlsRegistry?.prepareInlinePipContent(tabId) { }
+                    // ホームへ戻って通常表示のままPiPに入った場合も、PiP内でページ全画面へ切り替えて滑らかにする。
+                    pipAutoFullscreen = true
+                    videoControlsRegistry?.requestVideoFullscreenByTap(tabId)
+                }
             }
         } else {
             videoControlsTabId?.let { tabId -> videoControlsRegistry?.restoreInlinePipContent(tabId) }
+            if (pipAutoFullscreen) {
+                // PiPのために自動で全画面にした場合は、戻ったら元の通常表示へ戻す。
+                pipAutoFullscreen = false
+                videoControlsTabId?.let { tabId -> videoControlsRegistry?.exitVideoFullscreen(tabId) }
+            }
             restoreWebContentAfterPip()
             if (fullscreenContainer == null && ::composeOverlayView.isInitialized) composeOverlayView.visibility = View.VISIBLE
+            scheduleWebContentRefresh()
+            refreshVideoControlsVisibility()
         }
         CrashDiagnostics.record(
             if (isInPictureInPictureMode) "pip_entered" else "pip_exited",
