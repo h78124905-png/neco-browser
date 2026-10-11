@@ -1566,7 +1566,9 @@ class BrowserWebViewRegistry(
                   var root=document.documentElement||document.body;
                   var vw=Math.max(1,window.innerWidth||root.clientWidth||1);
                   var vh=Math.max(1,window.innerHeight||root.clientHeight||1);
-                  if(rect.width>0 && rect.height>0){
+                  var key=[Math.round(rect.left),Math.round(rect.top),Math.round(rect.width),Math.round(rect.height),Math.round(vw),Math.round(vh)].join(',');
+                  if(rect.width>0 && rect.height>0 && key!==window.__nekoLastVideoBounds){
+                    window.__nekoLastVideoBounds=key;
                     window.NekoBrowserVideoBounds.report(
                       Math.round(rect.left),
                       Math.round(rect.top),
@@ -1583,6 +1585,13 @@ class BrowserWebViewRegistry(
                 video.__nekoBrowserDimensionsTracked=true;
                 ['loadedmetadata','resize','playing','loadeddata','canplay'].forEach(function(name){video.addEventListener(name,report,{passive:true});});
               }
+              // YouTubeは再生中もDOMを頻繁に書き換えるため、変更通知は1フレームに1回へまとめる。
+              var scheduled=false;
+              function scheduleScan(){
+                if(scheduled) return;
+                scheduled=true;
+                requestAnimationFrame(function(){scheduled=false;document.querySelectorAll('video').forEach(track);report();});
+              }
               function scan(){document.querySelectorAll('video').forEach(track);report();}
               scan();
               window.addEventListener('resize',report,{passive:true});
@@ -1591,7 +1600,7 @@ class BrowserWebViewRegistry(
                 visualViewport.addEventListener('resize',report,{passive:true});
                 visualViewport.addEventListener('scroll',report,{passive:true});
               }
-              new MutationObserver(scan).observe(document.documentElement||document,{subtree:true,childList:true});
+              new MutationObserver(scheduleScan).observe(document.documentElement||document,{subtree:true,childList:true});
             })();
         """.trimIndent()
 
