@@ -263,7 +263,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                 onVideoDimensions = { width, height ->
                     hostActivity.updatePictureInPictureVideoDimensions(tab.id, width, height)
                     // reload/SPA遷移で生成された新しいvideoにも、現在の速度設定を一度だけ再適用する。
-                    registry.setVideoPlaybackRate(tab.id, state.settings.videoPlaybackRate)
+                    registry.setVideoPlaybackRate(tab.id, hostActivity.currentVideoPlaybackRate(state.settings.videoPlaybackRate))
                     hostActivity.showVideoControls(
                         registry = registry,
                         tabId = tab.id,
@@ -280,7 +280,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
                 onVideoBounds = { left, top, right, bottom ->
                     hostActivity.updatePictureInPictureVideoBounds(tab.id, left, top, right, bottom)
                     // 解像度通知より先に矩形だけ届く動画でも、速度指定を取りこぼさない。
-                    registry.setVideoPlaybackRate(tab.id, state.settings.videoPlaybackRate)
+                    registry.setVideoPlaybackRate(tab.id, hostActivity.currentVideoPlaybackRate(state.settings.videoPlaybackRate))
                     // 解像度通知が遅れる動画でも、実DOMの矩形が取れた時点で操作UIを出せる。
                     hostActivity.showVideoControls(
                         registry = registry,
