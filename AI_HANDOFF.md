@@ -57,7 +57,7 @@ export KEY_PASSWORD=...
 ./gradlew assembleRelease --no-daemon
 ```
 
-keystore未設定時は、検証用としてdebug keystoreへフォールバックします。本番配布では必ず固有のrelease keystoreを使用してください。
+keystore未設定時は、リポジトリ同梱の固定鍵 `app/signing/neco-release.p12`（alias `neco`）で署名します。CIのビルドごとに鍵が変わると上書き更新できないため、この鍵を変更・削除しないでください。
 
 ## 注意
 
