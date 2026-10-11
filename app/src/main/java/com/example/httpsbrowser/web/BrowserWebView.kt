@@ -306,6 +306,14 @@ class BrowserWebViewRegistry(
                   if (Math.abs(v.defaultPlaybackRate - currentRate) > 0.001) {
                     v.defaultPlaybackRate = currentRate;
                   }
+                  // YouTubeはプレーヤー内部の速度で上書きし直すため、内部APIにも同じ速度を渡す。
+                  var player = v.closest ? v.closest('.html5-video-player') : null;
+                  player = player || document.getElementById('movie_player');
+                  var adShowing = player && player.classList && player.classList.contains('ad-showing');
+                  if (!adShowing && player && typeof player.setPlaybackRate === 'function') {
+                    var internal = typeof player.getPlaybackRate === 'function' ? player.getPlaybackRate() : -1;
+                    if (Math.abs(internal - currentRate) > 0.001) player.setPlaybackRate(currentRate);
+                  }
                   if (Math.abs(v.playbackRate - currentRate) > 0.001) {
                     v.playbackRate = currentRate;
                   }
@@ -339,6 +347,15 @@ class BrowserWebViewRegistry(
                 }, true);
                 document.addEventListener('play', function(event){
                   if(event.target && event.target.tagName === 'VIDEO') applyRateToVideo(event.target);
+                }, true);
+                // ページ側が速度を戻した瞬間に、選択中の速度へ戻す。
+                document.addEventListener('ratechange', function(event){
+                  var v = event.target;
+                  if(!v || v.tagName !== 'VIDEO') return;
+                  var r = window.__httpsBrowserPlaybackRate;
+                  if (typeof r === 'number' && Math.abs(v.playbackRate - r) > 0.001) {
+                    setTimeout(function(){ applyRateToVideo(v); }, 0);
+                  }
                 }, true);
 
                 // YouTubeは同じvideo要素のsrcだけを差し替えることがあるため、
@@ -391,8 +408,8 @@ class BrowserWebViewRegistry(
                 style.textContent=
                   'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}' +
                   '*{visibility:hidden!important;}' +
-                  '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important;transform:none!important;}' +
-                  '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:var(--neko-pip-video-left)!important;top:var(--neko-pip-video-top)!important;right:auto!important;bottom:auto!important;width:var(--neko-pip-video-width)!important;height:var(--neko-pip-video-height)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:fill!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
+                  '[data-neko-pip-ancestor]{visibility:visible!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important;transform:none!important;filter:none!important;contain:none!important;will-change:auto!important;perspective:none!important;}' +
+                  '[data-neko-pip-video]{visibility:visible!important;position:fixed!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;background:#000!important;object-position:center!important;z-index:2147483647!important;transform:none!important;}';
                 (document.head||document.documentElement).appendChild(style);
 
                 var node=active;
@@ -458,7 +475,9 @@ class BrowserWebViewRegistry(
               var media = Array.from(document.querySelectorAll('video'));
               var active = media.find(function(v){ return !v.paused && !v.ended; }) || media[0];
               if (!active) return;
-              if (active.paused || active.ended) {
+              var intent = (active.paused || active.ended) ? 'play' : 'pause';
+              try { document.dispatchEvent(new CustomEvent('neko-user-intent', {detail: intent})); } catch (_) {}
+              if (intent === 'play') {
                 active.play().catch(function(){});
               } else {
                 active.pause();
