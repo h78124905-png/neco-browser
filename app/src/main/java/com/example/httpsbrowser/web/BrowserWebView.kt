@@ -47,9 +47,17 @@ import java.util.concurrent.ConcurrentHashMap
 class BrowserWebViewRegistry(
     private val context: Context
 ) {
+    /** YouTube用。document-start scriptがブリッジ経由で読む、現在の再生速度。 */
+    @Volatile private var youtubePlaybackRate: Float = 1.0f
+    @Volatile private var playbackRateInitialized: Boolean = false
+
     private val entries = ConcurrentHashMap<String, Entry>()
 
     fun obtain(tab: BrowserTab, settings: BrowserSettings, callbacks: BrowserWebCallbacks): WebView {
+        if (!playbackRateInitialized) {
+            youtubePlaybackRate = settings.videoPlaybackRate.coerceIn(0.25f, 4.0f)
+            playbackRateInitialized = true
+        }
         val entry = entries[tab.id] ?: Entry(createWebView(tab.id)).also { entries[tab.id] = it }
         entry.callbacks = callbacks
         entry.settings = settings
@@ -291,6 +299,8 @@ class BrowserWebViewRegistry(
      */
     fun setVideoPlaybackRate(tabId: String, rate: Float) {
         val safeRate = rate.coerceIn(0.25f, 4.0f)
+        youtubePlaybackRate = safeRate
+        playbackRateInitialized = true
         entries[tabId]?.webView?.evaluateJavascript(
             """
             (function(rate){
@@ -459,6 +469,49 @@ class BrowserWebViewRegistry(
         )
     }
 
+    /**
+     * 通常表示の動画を、ページの全画面（custom view）経由でPiPへ載せるための準備。
+     * 通常表示のままPiPにするとページ全体の合成が続いてカクつくため、全画面と同じ経路にする。
+     * Fullscreen APIはユーザー操作が必要なので、ページ側で1回だけタップを横取りしてrequestFullscreenを呼び、
+     * Android側から本物のタッチイベントを1回送る。横取り中のタップはページへ渡さない（再生/停止が切り替わらない）。
+     */
+    fun requestVideoFullscreenByTap(tabId: String) {
+        val view = entries[tabId]?.webView ?: return
+        view.evaluateJavascript(FULLSCREEN_TAP_ARM_SCRIPT) { result ->
+            if (result?.contains("armed") != true) return@evaluateJavascript
+            view.post {
+                val x = (view.width / 2f).coerceAtLeast(1f)
+                val y = (view.height / 2f).coerceAtLeast(1f)
+                val downTime = android.os.SystemClock.uptimeMillis()
+                val down = android.view.MotionEvent.obtain(downTime, downTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0)
+                down.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                view.dispatchTouchEvent(down)
+                down.recycle()
+                view.postDelayed({
+                    val up = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), android.view.MotionEvent.ACTION_UP, x, y, 0)
+                    up.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                    view.dispatchTouchEvent(up)
+                    up.recycle()
+                }, 40L)
+            }
+        }
+    }
+
+    fun exitVideoFullscreen(tabId: String) {
+        entries[tabId]?.webView?.evaluateJavascript(
+            "(function(){try{var d=document;if(d.fullscreenElement&&d.exitFullscreen){var p=d.exitFullscreen();if(p&&p.catch)p.catch(function(){});}else if(d.webkitFullscreenElement&&d.webkitExitFullscreen){d.webkitExitFullscreen();}}catch(_e){}})();",
+            null
+        )
+    }
+
+    /** PiPから戻った直後に、ページへviewportの再計測を促す（下半分が黒いまま残るのを防ぐ）。 */
+    fun dispatchViewportResize(tabId: String) {
+        entries[tabId]?.webView?.evaluateJavascript(
+            "(function(){try{window.dispatchEvent(new Event('resize'));}catch(_e){}})();",
+            null
+        )
+    }
+
     fun seekVideo(tabId: String, seconds: Int) {
         val safeSeconds = seconds.coerceIn(-60, 60)
         entries[tabId]?.webView?.evaluateJavascript(
@@ -565,6 +618,8 @@ class BrowserWebViewRegistry(
         // HTML5動画はChromiumが専用の合成面を管理するため、通常のLAYER_TYPE_NONEに委ねる。
         // これによりGoogle動画プレビューの映像面と親WebViewの黒白レイヤーの競合を避ける。
         setLayerType(View.LAYER_TYPE_NONE, null)
+        // PiP・バックグラウンド中もrendererの優先度を落とさず、動画のコマ落ちを防ぐ。
+        runCatching { setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false) }
         // 独自の右端レールを使うため、横方向のedge effect/scrollbarが動画の左端に
         // 白いレイヤーとして露出しないよう、WebView標準のスクロール装飾を無効化する。
         overScrollMode = View.OVER_SCROLL_NEVER
@@ -662,6 +717,10 @@ class BrowserWebViewRegistry(
                     activityRef.get()?.onWebMediaEnded()
                 }
             }
+
+            /** YouTubeのdocument-start scriptが参照する、ユーザーが選んだ現在の再生速度。 */
+            @JavascriptInterface
+            fun getPlaybackRate(): Float = youtubePlaybackRate
 
             @JavascriptInterface
             fun requestPictureInPicture() {
@@ -1442,6 +1501,42 @@ class BrowserWebViewRegistry(
         const val VIDEO_DIMENSIONS_BRIDGE_NAME = "NekoBrowserVideoDimensions"
         const val VIDEO_BOUNDS_BRIDGE_NAME = "NekoBrowserVideoBounds"
         const val VIDEO_MEDIA_BRIDGE_NAME = "NekoMediaBridge"
+
+        private val FULLSCREEN_TAP_ARM_SCRIPT = """
+            (function(){
+              try{
+                var d=document;
+                if(d.fullscreenElement||d.webkitFullscreenElement) return 'already';
+                var vids=Array.prototype.slice.call(d.querySelectorAll('video'));
+                var v=vids.find(function(x){return !x.paused&&!x.ended;})||vids[0];
+                if(!v) return 'none';
+                window.__nekoFsTarget=(v.closest&&(v.closest('.html5-video-player')||v.closest('#player-container-id')))||v;
+                if(!window.__nekoFsInstalled){
+                  window.__nekoFsInstalled=true;
+                  var handler=function(e){
+                    if(!window.__nekoFsArmUntil||Date.now()>window.__nekoFsArmUntil) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if((e.type==='touchend'||e.type==='pointerup'||e.type==='click')&&!window.__nekoFsDone){
+                      window.__nekoFsDone=true;
+                      var t=window.__nekoFsTarget;
+                      try{
+                        var fn=t.requestFullscreen||t.webkitRequestFullscreen;
+                        var p=fn&&fn.call(t);
+                        if(p&&p.catch)p.catch(function(){});
+                      }catch(_e){}
+                    }
+                  };
+                  ['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'].forEach(function(type){
+                    window.addEventListener(type,handler,{capture:true,passive:false});
+                  });
+                }
+                window.__nekoFsDone=false;
+                window.__nekoFsArmUntil=Date.now()+800;
+                return 'armed';
+              }catch(e){return 'error';}
+            })();
+        """.trimIndent()
         const val MAX_STATIC_COSMETIC_SELECTORS = 500
         const val MAX_AGGRESSIVE_YOUTUBE_SELECTORS = 2_000
         const val GENERIC_COSMETIC_DELAY_MS = 350L
