@@ -21,13 +21,20 @@ android {
 
     signingConfigs {
         create("release") {
-            System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }?.let { keyStorePath ->
-                storeFile = file(keyStorePath)
-            }
+            // 署名鍵が毎回変わると上書き更新できないため、環境変数がなければリポジトリ同梱の固定鍵を使う。
+            val envKeyStore = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
             storeType = "PKCS12"
-            storePassword = System.getenv("KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("KEY_ALIAS")
-            keyPassword = System.getenv("KEY_PASSWORD")
+            if (envKeyStore != null) {
+                storeFile = file(envKeyStore)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            } else {
+                storeFile = file("signing/neco-release.p12")
+                storePassword = "necobrowser"
+                keyAlias = "neco"
+                keyPassword = "necobrowser"
+            }
         }
     }
 
@@ -39,11 +46,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = if (System.getenv("KEYSTORE_FILE").orEmpty().isBlank()) {
-                signingConfigs.getByName("debug")
-            } else {
-                signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
