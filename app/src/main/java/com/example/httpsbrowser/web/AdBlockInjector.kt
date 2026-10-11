@@ -14,7 +14,6 @@ object AdBlockInjector {
         ytd-rich-item-renderer:has(> ytd-ad-slot-renderer),
         ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer),
         .ytp-ad-text-overlay, .ytp-ad-preview-container, .ytp-ad-image-overlay,
-        [class*="ad-"], [id*="ad-"], [class*="banner"], [id*="banner"],
         [data-ad], [aria-label="広告"], .adsbygoogle, .taboola-container, .outbrain-widget {
             display: none !important;
             visibility: hidden !important;
@@ -23,17 +22,6 @@ object AdBlockInjector {
             opacity: 0 !important;
             pointer-events: none !important;
         }
-
-        /* 黒画面・音だけ状態を防ぐための強制表示 */
-        .html5-video-player video, video.html5-main-video,
-        video[style*="display: none"], video[style*="visibility: hidden"] {
-            display: block !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            z-index: 100 !important;
-            position: relative !important;
-            background: transparent !important;
-        }
     """
 
     private const val YOUTUBE_PRUNE_JS = """
@@ -41,18 +29,15 @@ object AdBlockInjector {
         Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
         Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
         Object.defineProperty(document, 'webkitHidden', { get: () => false, configurable: true });
+        Object.defineProperty(document, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
 
-        // 関連イベントの完全握りつぶし
-        ['visibilitychange', 'pagehide', 'blur', 'focusout'].forEach(event => {
-            document.addEventListener(event, e => {
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            }, true);
-            window.addEventListener(event, e => {
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            }, true);
+        // バックグラウンド・PiP中にYouTubeが自分で一時停止しないよう、可視性イベントだけを握りつぶす。
+        ['visibilitychange', 'webkitvisibilitychange'].forEach(event => {
+            window.addEventListener(event, e => { e.stopImmediatePropagation(); }, true);
+            document.addEventListener(event, e => { e.stopImmediatePropagation(); }, true);
         });
+        window.addEventListener('blur', e => { e.stopImmediatePropagation(); }, true);
+        try { Document.prototype.hasFocus = function() { return true; }; } catch (e) {}
 
         // window.onblur も無効化
         window.onblur = null;
@@ -124,11 +109,25 @@ object AdBlockInjector {
             return res;
         };
 
-        // [4] スキップボタンの自動クリックのみ（videoタグへの操作は一切行わない）
+        // [4] 広告が貫通した時の最後の砦: スキップを押し、押せなければミュートして末尾へ送る。
+        let adMutedByUs = false;
         function clickSkipButton() {
-            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
+            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-container button, [class*="skip-button"]');
             if (skipBtn) {
                 skipBtn.click();
+            }
+            const player = document.querySelector('.html5-video-player');
+            const video = document.querySelector('video.html5-main-video') || document.querySelector('.html5-video-player video');
+            const isAd = !!(player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')));
+            if (!video) return;
+            if (isAd) {
+                if (!video.muted) { video.muted = true; adMutedByUs = true; }
+                if (isFinite(video.duration) && video.duration > 0 && video.currentTime < video.duration - 0.3) {
+                    try { video.currentTime = video.duration - 0.1; } catch (e) {}
+                }
+            } else if (adMutedByUs) {
+                video.muted = false;
+                adMutedByUs = false;
             }
         }
 
@@ -140,6 +139,8 @@ object AdBlockInjector {
 
         // 1. ユーザー操作の検知 (UI構造変更に強い汎用的な監視)
         document.addEventListener('pointerdown', (e) => {
+            // m.youtube の操作UIはplayer外にあることがあるため、画面タップは全てユーザー操作として扱う。
+            lastUserActionTime = Date.now();
             const player = e.target.closest('.html5-video-player');
             if (player) {
                 lastUserActionTime = Date.now();
@@ -151,6 +152,12 @@ object AdBlockInjector {
                     userIntent = 'interaction';
                 }
             }
+        }, true);
+
+        // ネイティブ側（PiPボタン・通知）の再生/停止もユーザー操作として扱う。
+        document.addEventListener('neko-user-intent', (e) => {
+            lastUserActionTime = Date.now();
+            userIntent = e.detail === 'pause' ? 'pause' : 'play';
         }, true);
 
         // 2. キーボード操作の検知 (入力フィールド除外)
@@ -175,7 +182,7 @@ object AdBlockInjector {
             const isRecentUserAction = (now - lastUserActionTime) < 3000;
 
             if (userIntent === 'pause') return;
-            if (isRecentUserAction && video.seeking) return;
+            if (isRecentUserAction) { userIntent = 'pause'; return; }
 
             const player = document.querySelector('.html5-video-player');
             if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) return;
@@ -269,17 +276,21 @@ object AdBlockInjector {
             // Google検索ではYouTube向けdocument-start injectorを適用しない。
             const host = (location.hostname || '').toLowerCase();
             if (host === 'google.com' || host.endsWith('.google.com') || host.startsWith('google.')) return;
+            // YouTube専用の処理（可視性偽装・JSON prune・自動再開）はYouTubeだけで動かす。他サイトの入力やfocusを壊さない。
+            const isYoutube = /(^|\.)youtube\.com${'$'}/.test(host) || /(^|\.)youtube-nocookie\.com${'$'}/.test(host);
             const install = function() {
                 if (!document.head || document.getElementById('__youtube_adblock_stealth_css')) return;
                 const style = document.createElement('style');
                 style.id = '__youtube_adblock_stealth_css';
-                style.textContent = \${quote(GENERIC_HIDE_CSS)};
+                style.textContent = ${quote(GENERIC_HIDE_CSS)};
                 document.head.appendChild(style);
             };
             install();
             if (!document.head) document.addEventListener('DOMContentLoaded', install, {once:true});
 
-            \${YOUTUBE_PRUNE_JS}
+            if (isYoutube) {
+                ${YOUTUBE_PRUNE_JS}
+            }
         })();
     """.trimIndent()
 
