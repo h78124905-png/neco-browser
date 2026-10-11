@@ -699,7 +699,13 @@ class MainActivity : ComponentActivity() {
         }
         pipAwaitingFullscreen = true
         videoControlsContainer?.visibility = View.GONE
-        registry.requestVideoFullscreenByTap(tabId)
+        registry.requestVideoFullscreenByTap(tabId) { armed ->
+            if (!armed && pipAwaitingFullscreen) {
+                // ショートなど全画面を経由しないページは、すぐ通常表示のPiPへ。
+                pipAwaitingFullscreen = false
+                if (!enterInlinePictureInPicture("video_control_button_direct")) refreshVideoControlsVisibility()
+            }
+        }
         // 全画面にならないページでは従来の通常表示PiPへ切り替える。
         window.decorView.postDelayed({
             if (pipAwaitingFullscreen) {
@@ -812,8 +818,7 @@ class MainActivity : ComponentActivity() {
                 videoControlsTabId?.let { tabId ->
                     videoControlsRegistry?.prepareInlinePipContent(tabId) { }
                     // ホームへ戻って通常表示のままPiPに入った場合も、PiP内でページ全画面へ切り替えて滑らかにする。
-                    pipAutoFullscreen = true
-                    videoControlsRegistry?.requestVideoFullscreenByTap(tabId)
+                    videoControlsRegistry?.requestVideoFullscreenByTap(tabId) { armed -> pipAutoFullscreen = armed }
                 }
             }
         } else {
