@@ -36,6 +36,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.ViewCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.util.concurrent.ConcurrentHashMap
 import com.example.httpsbrowser.ui.BrowserScreen
@@ -79,6 +80,8 @@ class MainActivity : ComponentActivity() {
     private var videoControlsInitialRate: Float = 1.0f
     private var pictureInPictureActive by mutableStateOf(false)
     @Volatile private var pictureInPictureTransitionRequested = false
+    private var pipSavedHostParams: FrameLayout.LayoutParams? = null
+    private var pipSavedRootPadding: IntArray? = null
 
     // custom viewは全画面・PiP遷移で座標が変わる。sourceRectHintを追従させる。
     private val pipHintLayoutListener = View.OnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
@@ -185,8 +188,12 @@ class MainActivity : ComponentActivity() {
         // ホーム遷移直後はChromiumがpagehide/pauseを通知することがある。
         // PiP移行中に再生状態をfalseへ戻すと、通常再生PiPの条件を失うため保持する。
         if (pictureInPictureTransitionRequested) return
+        // ホーム遷移中（RESUMED以外）に届くpauseはページ側の離脱通知なので、再生状態を落とさない。
+        if (!isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
         webMediaPlaying = false
         setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
+        // 一時停止中にホームへ戻った時は自動PiPしない。
+        updatePictureInPictureParams(fullscreenVideoView)
     }
 
     fun onWebMediaEnded() {
@@ -287,6 +294,8 @@ class MainActivity : ComponentActivity() {
      */
     fun hideNormalWebContent() {
         if (::normalWebContentHost.isInitialized.not()) return
+        // 独自ホームの上に動画ボタンを浮かせない。YouTubeへ戻ればshowVideoControlsで再表示される。
+        if (fullscreenContainer == null) videoControlsContainer?.visibility = View.GONE
         // ホーム／シークレットの新規ホームでは、直前ページのnative WebViewを保持するが
         // Composeホームを覆わない。次の通常ページ計測で前面状態を再設定する。
         normalWebContentPlacedAboveCompose = false
@@ -312,6 +321,8 @@ class MainActivity : ComponentActivity() {
         // 全画面custom view表示中はComposeの再計測が発生しても、通常WebView hostの
         // bringToFront()でfullscreen containerを覆わない。これが全画面動画を操作不能にする。
         if (fullscreenContainer != null) return
+        // PiP中はWebViewを画面全体へ広げているので、Composeの再計測で縮めない。
+        if (isInPictureInPictureMode || pipSavedHostParams != null) return
         // Page boxはComposeがstatus bar下から下部バー上まで測定した値をそのまま使う。
         // Google系では右端予約を外し、重ねる型Webポップアップの全領域をWebViewへ渡す。
         normalWebContentReservesRightTouchRail = reserveRightTouchRail
@@ -452,6 +463,10 @@ class MainActivity : ComponentActivity() {
         pictureInPictureActive || pictureInPictureTransitionRequested
 
     /** 動画を検出したタブの操作UIを通常画面へ表示する。全画面中は同じUIをcustom view側へ移す。 */
+    /** 操作UIで選んだ最新の速度。DataStore保存の反映待ちで古い速度へ戻さないために使う。 */
+    fun currentVideoPlaybackRate(fallback: Float): Float =
+        if (videoControlsContainer != null) videoSpeedRate else fallback
+
     fun showVideoControls(
         registry: BrowserWebViewRegistry,
         tabId: String,
@@ -527,6 +542,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createVideoControlsContainer(): FrameLayout = FrameLayout(this).apply {
+        // WebView hostやComposeが後からbringToFront()しても埋もれないよう、Z順で常に最前面へ置く。
+        translationZ = 10_000f
+        outlineProvider = null
         minimumWidth = (52 * resources.displayMetrics.density).toInt()
         minimumHeight = (168 * resources.displayMetrics.density).toInt()
         val pip = createPipButton()
@@ -691,14 +709,47 @@ class MainActivity : ComponentActivity() {
         videoControlsContainer?.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
         if (isInPictureInPictureMode) {
             if (::composeOverlayView.isInitialized) composeOverlayView.visibility = View.GONE
+            if (fullscreenContainer == null) {
+                expandWebContentForPip()
+                // Android 12+の自動PiPでは事前準備のJSが間に合わないことがあるため、ここでも動画だけにする。
+                videoControlsTabId?.let { tabId -> videoControlsRegistry?.prepareInlinePipContent(tabId) { } }
+            }
         } else {
             videoControlsTabId?.let { tabId -> videoControlsRegistry?.restoreInlinePipContent(tabId) }
+            restoreWebContentAfterPip()
             if (fullscreenContainer == null && ::composeOverlayView.isInitialized) composeOverlayView.visibility = View.VISIBLE
         }
         CrashDiagnostics.record(
             if (isInPictureInPictureMode) "pip_entered" else "pip_exited",
             "fullscreenView=${fullscreenVideoView != null}"
         )
+    }
+
+    /**
+     * 通常表示のWebViewはツールバー分ずれた矩形にあるため、そのままPiPにすると動画が端に寄る。
+     * PiP中だけWebView hostを画面全体（余白なし）へ広げ、動画をウィンドウ中央に合わせる。
+     */
+    private fun expandWebContentForPip() {
+        if (::normalWebContentHost.isInitialized.not() || pipSavedHostParams != null) return
+        val current = normalWebContentHost.layoutParams as? FrameLayout.LayoutParams ?: return
+        pipSavedHostParams = FrameLayout.LayoutParams(current)
+        pipSavedRootPadding = intArrayOf(appRoot.paddingLeft, appRoot.paddingTop, appRoot.paddingRight, appRoot.paddingBottom)
+        appRoot.setPadding(0, 0, 0, 0)
+        normalWebContentHost.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        normalWebContentHost.visibility = View.VISIBLE
+        normalWebContentHost.bringToFront()
+    }
+
+    private fun restoreWebContentAfterPip() {
+        val saved = pipSavedHostParams ?: return
+        pipSavedHostParams = null
+        pipSavedRootPadding?.let { p -> appRoot.setPadding(p[0], p[1], p[2], p[3]) }
+        pipSavedRootPadding = null
+        if (::normalWebContentHost.isInitialized) normalWebContentHost.layoutParams = saved
+        ViewCompat.requestApplyInsets(appRoot)
     }
 
     override fun onDestroy() {
