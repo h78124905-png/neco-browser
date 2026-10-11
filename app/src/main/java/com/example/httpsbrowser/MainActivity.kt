@@ -109,6 +109,10 @@ class MainActivity : ComponentActivity() {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            if (isInPictureInPictureMode || pipSavedHostParams != null) {
+                view.setPadding(0, 0, 0, 0)
+                return@setOnApplyWindowInsetsListener WindowInsetsCompat.CONSUMED
+            }
             view.setPadding(
                 bars.left,
                 bars.top,
@@ -362,7 +366,7 @@ class MainActivity : ComponentActivity() {
     fun showFullscreenCustomView(view: View, tabId: String?) {
         if (::appRoot.isInitialized.not()) return
         if (fullscreenVideoView === view && fullscreenContainer != null) return
-        hideFullscreenCustomView(fullscreenVideoView)
+        if (fullscreenContainer != null) hideFullscreenCustomView(fullscreenVideoView)
 
         val container = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         (view.parent as? ViewGroup)?.removeView(view)
@@ -414,7 +418,7 @@ class MainActivity : ComponentActivity() {
                 controlsTabId,
                 videoControlsPageUrl,
                 videoControlsAllowedHosts,
-                videoControlsInitialRate,
+                videoSpeedRate,
                 onVideoSpeedChanged
             )
         }
@@ -431,6 +435,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (tabId.isBlank() || width <= 0 || height <= 0) return
+        if (isPictureInPictureBusy()) return
         val dimensions = VideoDimensions(width, height)
         if (videoDimensionsByTab.put(tabId, dimensions) == dimensions) return
         if (fullscreenVideoTabId == tabId || videoControlsTabId == tabId) {
@@ -444,7 +449,11 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (tabId.isBlank() || right <= left || bottom <= top) return
-        videoBoundsByTab[tabId] = Rect(left, top, right, bottom)
+        // PiP中はvideoを画面いっぱいに広げているため、矩形はPiP窓そのもの。ここで比率を更新すると
+        // PiP窓のリサイズ→矩形変化→再リサイズのループになり、カクつきと黒帯の原因になる。
+        if (isPictureInPictureBusy()) return
+        val rect = Rect(left, top, right, bottom)
+        if (videoBoundsByTab.put(tabId, rect) == rect) return
         if (videoControlsTabId == tabId && fullscreenVideoView == null) updatePictureInPictureParams(null)
     }
 
@@ -463,6 +472,10 @@ class MainActivity : ComponentActivity() {
         pictureInPictureActive || pictureInPictureTransitionRequested
 
     /** 動画を検出したタブの操作UIを通常画面へ表示する。全画面中は同じUIをcustom view側へ移す。 */
+    /** PiP中・PiP移行中はページ側の矩形通知やボタン表示を反映しない。 */
+    fun isPictureInPictureBusy(): Boolean =
+        isInPictureInPictureMode || pictureInPictureTransitionRequested || pipSavedHostParams != null
+
     /** 操作UIで選んだ最新の速度。DataStore保存の反映待ちで古い速度へ戻さないために使う。 */
     fun currentVideoPlaybackRate(fallback: Float): Float =
         if (videoControlsContainer != null) videoSpeedRate else fallback
@@ -490,11 +503,19 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // 全画面の出入りで操作UIを作り直しても、同じタブなら今選んでいる速度を引き継ぐ。
+        val keepCurrentRate = videoControlsTabId == tabId && videoControlsRegistry === registry
         videoControlsRegistry = registry
         videoControlsTabId = tabId
         videoControlsPageUrl = effectivePageUrl
         videoControlsAllowedHosts = allowedHosts
         onVideoSpeedChanged = onPlaybackRateChanged
+
+        if (isPictureInPictureBusy()) {
+            // PiP窓に速度・PiPボタンを映り込ませない。
+            videoControlsContainer?.visibility = View.GONE
+            return
+        }
 
         if (sameVideoTarget) {
             // 動画のresize/scroll/reload通知でここへ何度来ても、ユーザーが選んだ速度を
@@ -511,7 +532,7 @@ class MainActivity : ComponentActivity() {
         videoControlsContainer = null
 
         videoControlsInitialRate = initialRate
-        videoSpeedRate = initialRate.coerceIn(1.0f, 2.0f)
+        if (!keepCurrentRate) videoSpeedRate = initialRate.coerceIn(1.0f, 2.0f)
         videoSpeedIndex = VIDEO_SPEEDS.indices.minByOrNull { kotlin.math.abs(VIDEO_SPEEDS[it] - videoSpeedRate) } ?: 0
         // 同じActivity内の別動画・別タブへ切り替わった時だけ、新しい動画へ保存済み速度を適用する。
         registry.setVideoPlaybackRate(tabId, videoSpeedRate)
@@ -591,6 +612,7 @@ class MainActivity : ComponentActivity() {
         if (videoView == null || !supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
         pipActivity = this
         pictureInPictureTransitionRequested = true
+        videoControlsContainer?.visibility = View.GONE
         val browserStarted = runCatching { startActivity(createBrowserTaskIntent()) }.isSuccess
         if (!browserStarted) {
             pictureInPictureTransitionRequested = false
@@ -655,6 +677,7 @@ class MainActivity : ComponentActivity() {
     private fun enterInlinePictureInPicture(source: String): Boolean {
         if (!supportsPictureInPicture() || isInPictureInPictureMode || pictureInPictureTransitionRequested) return false
         pictureInPictureTransitionRequested = true
+        videoControlsContainer?.visibility = View.GONE
         val registry = videoControlsRegistry
         val tabId = videoControlsTabId
 
@@ -811,8 +834,10 @@ class MainActivity : ComponentActivity() {
                 // PiPの比率は「動画ファイルの解像度」ではなく、現在画面に実際に
                 // 描画されているvideo要素の矩形を使う。CSSでletterbox/cropされている
                 // YouTube等でも、PiPの表示範囲をそのまま動画領域へ合わせる。
-                val aspectWidth = videoBounds.width()
-                val aspectHeight = videoBounds.height()
+                // 要素矩形はレターボックスを含むことがあるので、取れれば動画本来の解像度で比率を決める。
+                val intrinsic = videoControlsTabId?.let(videoDimensionsByTab::get)
+                val aspectWidth = intrinsic?.width ?: videoBounds.width()
+                val aspectHeight = intrinsic?.height ?: videoBounds.height()
                 val ratio = aspectWidth.toFloat() / aspectHeight.toFloat()
                 if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
                     builder.setAspectRatio(Rational(
