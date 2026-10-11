@@ -22,6 +22,11 @@ object AdBlockInjector {
             opacity: 0 !important;
             pointer-events: none !important;
         }
+
+        /* 貫通した広告は末尾へ送るまでの一瞬も見せない */
+        .html5-video-player.ad-showing video, .html5-video-player.ad-interrupting video {
+            opacity: 0 !important;
+        }
     """
 
     private const val YOUTUBE_PRUNE_JS = """
@@ -266,9 +271,53 @@ object AdBlockInjector {
             video.play().catch(() => {});
         }, 2000);
 
-        const observer = new MutationObserver(clickSkipButton);
+        // 広告の開始は動画イベントで即検知する。DOM変更は1フレームに1回へまとめて負荷を抑える。
+        ['loadedmetadata', 'durationchange', 'playing', 'timeupdate'].forEach(type => {
+            document.addEventListener(type, clickSkipButton, true);
+        });
+        let skipScheduled = false;
+        const observer = new MutationObserver(() => {
+            if (skipScheduled) return;
+            skipScheduled = true;
+            requestAnimationFrame(() => { skipScheduled = false; clickSkipButton(); });
+        });
         observer.observe(document.documentElement, { childList: true, subtree: true });
         setInterval(clickSkipButton, 500);
+
+        // [6] 再生速度の維持。ページ読み込み直後から動き、Android側で選んだ現在の速度をブリッジで参照する。
+        function nekoWantedRate() {
+            try {
+                if (window.NekoMediaBridge && typeof window.NekoMediaBridge.getPlaybackRate === 'function') {
+                    const r = Number(window.NekoMediaBridge.getPlaybackRate());
+                    if (r > 0) return r;
+                }
+            } catch (e) {}
+            return 0;
+        }
+        function keepRate(video) {
+            if (!video || video.tagName !== 'VIDEO') return;
+            const player = (video.closest && video.closest('.html5-video-player')) || document.getElementById('movie_player');
+            if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) return;
+            const r = nekoWantedRate();
+            if (!r) return;
+            try {
+                if (player && typeof player.setPlaybackRate === 'function' && typeof player.getPlaybackRate === 'function' &&
+                    Math.abs(player.getPlaybackRate() - r) > 0.001) {
+                    player.setPlaybackRate(r);
+                }
+            } catch (e) {}
+            try {
+                if (Math.abs(video.defaultPlaybackRate - r) > 0.001) video.defaultPlaybackRate = r;
+                if (Math.abs(video.playbackRate - r) > 0.001) video.playbackRate = r;
+            } catch (e) {}
+        }
+        ['loadedmetadata', 'play', 'playing', 'ratechange', 'durationchange'].forEach(type => {
+            document.addEventListener(type, e => keepRate(e.target), true);
+        });
+        setInterval(() => {
+            const v = document.querySelector('video.html5-main-video') || document.querySelector('video');
+            if (v && !v.paused) keepRate(v);
+        }, 700);
     """
 
     private val FULL_SCRIPT = """
