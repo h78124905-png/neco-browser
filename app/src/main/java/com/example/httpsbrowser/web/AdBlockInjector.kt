@@ -24,7 +24,7 @@ object AdBlockInjector {
         }
 
         /* 貫通した広告は末尾へ送るまでの一瞬も見せない */
-        .html5-video-player.ad-showing video, .html5-video-player.ad-interrupting video {
+        .html5-video-player.ad-showing:not(.ytp-shorts-mode) video {
             opacity: 0 !important;
         }
     """
@@ -61,8 +61,26 @@ object AdBlockInjector {
             'adYieldGroupKey', 'clientGpu', 'paidContentOverlay', 'adBreakParams'
         ]);
 
+        // ショート・関連動画の一覧に混ざる広告枠は、配列から要素ごと取り除く（空要素を残すと表示が崩れるため）。
+        const AD_ITEM_KEYS = ['adSlotRenderer', 'promotedSparklesWebRenderer', 'promotedVideoRenderer',
+            'compactPromotedVideoRenderer', 'displayAdRenderer', 'inFeedAdLayoutRenderer'];
+        function isAdItem(item) {
+            if (!item || typeof item !== 'object') return false;
+            for (const k of AD_ITEM_KEYS) if (k in item) return true;
+            const content = item.richItemRenderer && item.richItemRenderer.content;
+            if (content) for (const k of AD_ITEM_KEYS) if (k in content) return true;
+            return false;
+        }
+
         function pruneAds(obj, depth = 0) {
             if (!obj || typeof obj !== 'object' || depth > 12) return;
+            if (Array.isArray(obj)) {
+                for (let i = obj.length - 1; i >= 0; i--) {
+                    if (isAdItem(obj[i])) obj.splice(i, 1);
+                    else pruneAds(obj[i], depth + 1);
+                }
+                return;
+            }
             for (const key in obj) {
                 if (AD_KEYS.has(key)) {
                     if (Array.isArray(obj[key])) obj[key] = [];
@@ -100,8 +118,8 @@ object AdBlockInjector {
             const res = await origFetch.apply(this, args);
             const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
             
-            // player API のみフック
-            if (/youtubei\/v1\/player/.test(url)) {
+            // 動画本体・次の動画・ショートの取得APIだけをフック
+            if (/youtubei\/v1\/(player|next|reel\/)/.test(url)) {
                 try {
                     const clone = res.clone();
                     const json = await clone.json();
@@ -112,6 +130,20 @@ object AdBlockInjector {
                 } catch (e) {}
             }
             return res;
+        };
+
+        // JSON.parse経由で組み立てられるプレイヤー設定からも広告枠を抜く（該当キーがある時だけ処理）。
+        const origParse = JSON.parse;
+        JSON.parse = function(text, reviver) {
+            const result = origParse.call(this, text, reviver);
+            try {
+                if (result && typeof result === 'object' &&
+                    ('adPlacements' in result || 'playerAds' in result || 'adSlots' in result ||
+                     ('playerResponse' in result && result.playerResponse && typeof result.playerResponse === 'object'))) {
+                    pruneAds(result);
+                }
+            } catch (e) {}
+            return result;
         };
 
         // [4] 広告が貫通した時の最後の砦: スキップを押し、押せなければミュートして末尾へ送る。
