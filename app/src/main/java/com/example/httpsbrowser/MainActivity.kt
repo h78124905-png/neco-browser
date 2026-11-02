@@ -180,6 +180,9 @@ class MainActivity : ComponentActivity() {
 
     /** WebView内のHTML5 video状態をAndroidのMediaSessionへ反映する。 */
     fun onWebMediaPlay(title: String?, url: String?) {
+        // ホームタブ表示中は背後の動画を「再生中」と扱わない（離脱時の誤PiP防止）。
+        if (normalWebContentHidden && fullscreenContainer == null && !isInPictureInPictureMode) return
+        if (webMediaPlaying) return
         webMediaPlaying = true
         // 通常再生ではfullscreenVideoViewが存在しないため、PiP条件を明示的に更新する。
         // Android 12+はこのauto-enter設定を離脱直前に参照して自動でPiPへ移行する。
@@ -208,6 +211,16 @@ class MainActivity : ComponentActivity() {
     fun onWebMediaEnded() {
         webMediaPlaying = false
         setWebMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
+        updatePictureInPictureParams(fullscreenVideoView)
+    }
+
+    /** ページ遷移・ホーム表示時に古い再生状態を捨て、動画再生中以外の自動PiPを止める。 */
+    fun onWebDocumentChanged() {
+        if (isInPictureInPictureMode || pictureInPictureTransitionRequested || fullscreenContainer != null) return
+        if (!webMediaPlaying) return
+        webMediaPlaying = false
+        setWebMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
+        updatePictureInPictureParams(null)
     }
 
     /**
@@ -309,6 +322,7 @@ class MainActivity : ComponentActivity() {
         // 独自ホームの上に動画ボタンを浮かせない。YouTubeへ戻ればshowVideoControlsで再表示される。
         normalWebContentHidden = true
         if (fullscreenContainer == null) videoControlsContainer?.visibility = View.GONE
+        onWebDocumentChanged()
         // ホーム／シークレットの新規ホームでは、直前ページのnative WebViewを保持するが
         // Composeホームを覆わない。次の通常ページ計測で前面状態を再設定する。
         normalWebContentPlacedAboveCompose = false
@@ -739,7 +753,8 @@ class MainActivity : ComponentActivity() {
         super.onUserLeaveHint()
         // 動画再生中にホームへ離脱したら、通常のバックグラウンド再生ではなくPiPへ移行する。
         // Android 12+はauto-enterを併用し、API 26〜30はここから明示的に入る。
-        if (webMediaPlaying && supportsPictureInPicture() && !isInPictureInPictureMode) {
+        if (webMediaPlaying && (!normalWebContentHidden || fullscreenVideoView != null) &&
+            supportsPictureInPicture() && !isInPictureInPictureMode) {
             if (fullscreenVideoView != null) {
                 enterFullscreenPictureInPictureMode()
             } else {
@@ -965,7 +980,7 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // 動画再生中はinline videoでもホーム離脱時にAndroidへPiP移行を任せる。
-            builder.setAutoEnterEnabled(webMediaPlaying || videoView != null)
+            builder.setAutoEnterEnabled((webMediaPlaying && !normalWebContentHidden) || videoView != null)
             if (videoView != null) builder.setSeamlessResizeEnabled(true)
         }
         return builder.build()
