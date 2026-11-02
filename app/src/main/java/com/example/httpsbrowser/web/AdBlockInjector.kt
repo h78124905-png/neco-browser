@@ -96,9 +96,27 @@ object AdBlockInjector {
         // [3] fetch フックの限定復活 (貫通対策)
         // ★検知リスクを最小限にするため、/youtubei/v1/player のみに限定
         const origFetch = window.fetch;
+        // 広告枠そのものをサーバーに返させない: player要求のclientScreenをADUNITへ書き換える。
+        // 返答から広告を後で消すより早く、広告待ちの読み込み（ぐるぐる）も起きにくい。
+        function rewritePlayerBody(body) {
+            return (typeof body === 'string' && body.indexOf('"clientScreen":"WATCH"') !== -1)
+                ? body.replace('"clientScreen":"WATCH"', '"clientScreen":"ADUNIT"') : body;
+        }
         window.fetch = async function(...args) {
+            const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] instanceof URL ? args[0].href : (args[0]?.url || ''));
+            if (/youtubei\/v1\/player/.test(reqUrl)) {
+                try {
+                    if (args[1] && typeof args[1].body === 'string') {
+                        args[1] = Object.assign({}, args[1], { body: rewritePlayerBody(args[1].body) });
+                    } else if (args[0] instanceof Request && !args[1]) {
+                        const text = await args[0].clone().text();
+                        const changed = rewritePlayerBody(text);
+                        if (changed !== text) args[0] = new Request(args[0], { body: changed });
+                    }
+                } catch (e) {}
+            }
             const res = await origFetch.apply(this, args);
-            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+            const url = reqUrl;
             
             // player API のみフック
             if (/youtubei\/v1\/player/.test(url)) {
@@ -204,58 +222,48 @@ object AdBlockInjector {
         }, true);
 
         // 4. PiP対象videoの再生状態をAndroidへ通知する。
-        // 複数のvideoがあるページでも、1つでも再生中なら「video再生中」とする。audioはPiP状態に影響させない。
-        const playingMedia = new Set();
-
-        function notifyMediaState() {
+        // ミュートの自動プレビューや小さな動画は「再生中」と数えない。実際の状態を毎回数え直す。
+        let lastReportedPlaying = null;
+        function isRealPlayback(v) {
+            if (!(v instanceof HTMLVideoElement) || v.paused || v.ended || v.readyState < 2) return false;
+            if (v.muted && !adMutedByUs) return false;
+            const r = v.getBoundingClientRect();
+            return r.width >= 120 && r.height >= 68;
+        }
+        function notifyMediaState(force) {
             try {
                 if (!window.NekoMediaBridge) return;
-                if (playingMedia.size > 0) {
-                    window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
-                } else {
-                    window.NekoMediaBridge.onMediaPause();
-                }
+                const playing = Array.from(document.querySelectorAll('video')).some(isRealPlayback);
+                if (!force && playing === lastReportedPlaying) return;
+                lastReportedPlaying = playing;
+                if (playing) window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
+                else window.NekoMediaBridge.onMediaPause();
             } catch (_) {}
         }
-
-        document.addEventListener('play', (e) => {
-            const media = e.target;
-            if (media instanceof HTMLVideoElement) {
-                playingMedia.add(media);
-                userIntent = null;
-                notifyMediaState();
-            }
-        }, true);
-
-        document.addEventListener('pause', (e) => {
-            const media = e.target;
-            if (media instanceof HTMLVideoElement) {
-                playingMedia.delete(media);
-                notifyMediaState();
-            }
-        }, true);
-
-        document.addEventListener('ended', (e) => {
-            const media = e.target;
-            if (media instanceof HTMLVideoElement) {
-                playingMedia.delete(media);
-                try {
-                    if (window.NekoMediaBridge) {
-                        if (playingMedia.size > 0) {
-                            window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
-                        } else {
-                            window.NekoMediaBridge.onMediaEnded();
-                        }
-                    }
-                } catch (_) {}
-            }
-        }, true);
-
-        // 既に生成済みのメディアがあるページにも対応する。
-        document.querySelectorAll('video').forEach((media) => {
-            if (!media.paused && !media.ended) playingMedia.add(media);
+        ['play', 'playing', 'pause', 'volumechange', 'emptied'].forEach(type => {
+            document.addEventListener(type, (e) => {
+                if (!(e.target instanceof HTMLVideoElement)) return;
+                if (type === 'play' || type === 'playing') userIntent = null;
+                setTimeout(() => notifyMediaState(false), 0);
+            }, true);
         });
-        notifyMediaState();
+        document.addEventListener('ended', (e) => {
+            if (!(e.target instanceof HTMLVideoElement)) return;
+            try {
+                const playing = Array.from(document.querySelectorAll('video')).some(isRealPlayback);
+                lastReportedPlaying = playing;
+                if (window.NekoMediaBridge) {
+                    if (playing) window.NekoMediaBridge.onMediaPlay(document.title || 'メディア', location.href);
+                    else window.NekoMediaBridge.onMediaEnded();
+                }
+            } catch (_) {}
+        }, true);
+        window.addEventListener('pagehide', () => {
+            try { if (window.NekoMediaBridge) window.NekoMediaBridge.onMediaPause(); } catch (_) {}
+        }, true);
+        // ホームから戻った時・SPA遷移後も実状態へ合わせ直す（再生中なら再通知）。
+        setInterval(() => notifyMediaState(lastReportedPlaying === true), 2000);
+        notifyMediaState(true);
 
         // 5. 保険のポーリング (状態遷移中の誤作動防止付き)
         setInterval(() => {
