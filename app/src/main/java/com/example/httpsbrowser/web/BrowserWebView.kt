@@ -1016,6 +1016,8 @@ class BrowserWebViewRegistry(
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             CrashDiagnostics.recordWebViewNavigation(url)
+            // 新しい文書では前ページの再生状態を引き継がない（動画以外での真っ黒PiP防止）。
+            (context as? MainActivity)?.onWebDocumentChanged()
             val entry = entries[tabId]
             entry?.documentIsAlreadyDark = false
             entry?.activeDocumentUrl = url
@@ -1169,6 +1171,15 @@ class BrowserWebViewRegistry(
         override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
             if (!isUserGesture) return false // 自動ポップアップは拒否する。
             val current = entries[tabId] ?: return false
+            // target=_blankの通常リンクは、空のホームタブを作らず同じタブでリンク先へ移動する。
+            val hit = view.hitTestResult
+            val anchorUrl = if (hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE) hit.extra else null
+            if (!anchorUrl.isNullOrBlank() &&
+                (anchorUrl.startsWith("https://", true) || anchorUrl.startsWith("http://", true))) {
+                val target = upgradeToHttps(anchorUrl)
+                if (target != null) load(tabId, target) else current.callbacks.onBlockedNavigation(anchorUrl)
+                return false
+            }
             val newTabId = current.callbacks.onPopupRequested() ?: return false
             val popupView = createWebView(newTabId)
             // Transportへ渡して読み込みを開始する前に、popup WebView自身の初期サイズを確定する。
