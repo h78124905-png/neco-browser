@@ -77,6 +77,10 @@ object CrashDiagnostics {
         File(context.applicationContext.filesDir, FILE_NAME).takeIf(File::isFile)?.readText().orEmpty()
     }.getOrDefault("")
 
+    fun clear(context: Context) {
+        synchronized(this) { runCatching { File(context.applicationContext.filesDir, FILE_NAME).delete() } }
+    }
+
     fun share(context: Context) {
         val text = read(context).ifBlank { "ねこぶらうざのクラッシュ診断情報はまだありません。" }
         val intent = Intent(Intent.ACTION_SEND).apply {
