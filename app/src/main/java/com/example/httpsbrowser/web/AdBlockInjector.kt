@@ -329,7 +329,9 @@ object AdBlockInjector {
         if (AD_HOST_SUFFIXES.any { host == it || host.endsWith(".$it") }) return true
         val p = slash + 1
         if (url.startsWith("pagead", p) || url.startsWith("api/stats/ads", p) || url.startsWith("get_midroll_info", p)) return true
-        if (url.endsWith("/ad.js") || url.contains("/ad_break") || url.contains("=adunit&")) return true
+        // プレーヤー本体の広告モジュール（/s/player/.../ad.js）は止めない。止めると読込待ちで10数秒ぐるぐるする。
+        if (url.endsWith("/ad.js") && !url.contains("/s/player/")) return true
+        if ( url.contains("/ad_break") || url.contains("=adunit&")) return true
         val adParam = url.indexOf("&ad_", p)
         if (adParam != -1) {
             val nameStart = adParam + 4
