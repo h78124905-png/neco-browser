@@ -40,10 +40,10 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import java.net.URI
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** 検証用: 独自JS注入・SW遮断をすべて止め、Soulと同じ素のWebViewでYouTube広告の有無を確かめる。 */
 private const val PLAIN_YOUTUBE_TEST = true
-import java.util.concurrent.ConcurrentHashMap
 
 class BrowserWebViewRegistry(
     private val context: Context
