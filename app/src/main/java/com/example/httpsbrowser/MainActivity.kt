@@ -58,7 +58,6 @@ class MainActivity : ComponentActivity() {
     private var pageTouchTop = 0
     private var pageTouchRight = 0
     private var pageTouchBottom = 0
-    private var forwardingNormalWebTouch = false
     /** Composeの右端スクロールレールが見える通常ページだけ、レール用のタッチ領域を予約する。 */
     private var normalWebContentReservesRightTouchRail = false
     /** Googleのページ内モーダルなど、通常WebViewをComposeより前面に置くページかを保持する。 */
@@ -250,38 +249,6 @@ class MainActivity : ComponentActivity() {
                 .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
                 .build()
         )
-    }
-
-    /**
-     * Compose rootが最前面でも、ページ矩形内で始まった連続タッチをnative WebViewへ転送する。
-     * 右端レール用の細い領域はComposeへ残し、通常ページ上のスクロール・ピンチを阻害しない。
-     */
-    private fun forwardPageTouchToNativeWebView(event: MotionEvent): Boolean {
-        if (::normalWebContentHost.isInitialized.not() || normalWebContentHost.visibility != View.VISIBLE) return false
-        val railWidth = if (normalWebContentReservesRightTouchRail) {
-            (40f * resources.displayMetrics.density).roundToInt()
-        } else 0
-        val location = IntArray(2)
-        normalWebContentHost.getLocationOnScreen(location)
-        val hostScreenX = location[0].toFloat()
-        val hostScreenY = location[1].toFloat()
-        val rawX = event.rawX
-        val rawY = event.rawY
-        val withinHost = normalWebContentBoundsReady &&
-            rawX >= hostScreenX && rawX < hostScreenX + normalWebContentHost.width - railWidth &&
-            rawY >= hostScreenY && rawY < hostScreenY + normalWebContentHost.height
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            forwardingNormalWebTouch = withinHost
-        }
-        if (!forwardingNormalWebTouch) return false
-        val forwarded = MotionEvent.obtain(event)
-        forwarded.setLocation(rawX - hostScreenX, rawY - hostScreenY)
-        normalWebContentHost.dispatchTouchEvent(forwarded)
-        forwarded.recycle()
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-            forwardingNormalWebTouch = false
-        }
-        return true
     }
 
     /** 選択タブの通常WebViewをnative hostへ接続し、Composeの再構成から親Viewを分離する。 */
@@ -1030,22 +997,6 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun createOpenBrowserRemoteAction(): RemoteAction {
-        val intent = createBrowserTaskIntent()
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            REQUEST_OPEN_BROWSER_FROM_PIP,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return RemoteAction(
-            Icon.createWithResource(this, R.drawable.ic_browser),
-            "ブラウズを開く",
-            "PiP再生を続けたままブラウザを操作",
-            pendingIntent
-        )
-    }
-
     private fun setFullscreenSystemBars(fullscreen: Boolean) {
         WindowCompat.getInsetsController(window, window.decorView).apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
@@ -1090,6 +1041,5 @@ class MainActivity : ComponentActivity() {
         const val MIN_PIP_ASPECT_RATIO = 1f / 2.39f
         const val MAX_PIP_ASPECT_RATIO = 2.39f
         private val VIDEO_SPEEDS = floatArrayOf(1.0f, 1.5f, 2.0f)
-        const val REQUEST_OPEN_BROWSER_FROM_PIP = 4_021
     }
 }

@@ -7,7 +7,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -71,7 +70,7 @@ class BrowserWebViewRegistry(
             entry.webView,
             settings,
             isVideoPlaybackDocumentUrl(currentUrl),
-            entry.documentIsAlreadyDark && false,
+            false,
             currentUrl
         )
         entry.appliedForceDark = settings.forceDarkPages
@@ -86,7 +85,7 @@ class BrowserWebViewRegistry(
                         settings,
                         isVideoPlaybackDocumentUrl(url),
                         url,
-                        entry.documentIsAlreadyDark && false
+                        false
                     ),
                 youtubePage = isYoutubeDocumentUrl(url)
             )
@@ -96,21 +95,9 @@ class BrowserWebViewRegistry(
             entry.activeDocumentUrl = tab.lastRequestedUrl
             entry.rearmPageLifecycle(tab.lastRequestedUrl)
             CrashDiagnostics.recordWebViewNavigation(tab.lastRequestedUrl)
-            prepareDarkDocumentStartScript(entry, tab.lastRequestedUrl)
             entry.webView.loadUrl(tab.lastRequestedUrl)
         }
         return entry.webView
-    }
-
-    /**
-     * 標準フィルタの初回コンパイルまたは更新後に、すでに生成済みのWebViewへ遮断規則を再適用する。
-     * 初期load時にengine未準備だった場合でも、次の遷移を待たずYouTube document-start scriptletを登録する。
-     */
-    fun refreshContentFiltering() {
-        entries.values.forEach { entry ->
-            val url = entry.webView.url ?: entry.loadedUrl ?: entry.activeDocumentUrl.orEmpty()
-            if (url.isBlank()) return@forEach
-        }
     }
 
     fun load(tabId: String, url: String) {
@@ -128,7 +115,6 @@ class BrowserWebViewRegistry(
                 // 通常サイトへ連続遷移しても、白いページが先に見える状態を作らない。
                 beginDarkRevealGuard(entry.webView, entry, url)
                 CrashDiagnostics.recordWebViewNavigation(url)
-                prepareDarkDocumentStartScript(entry, url)
                 entry.webView.loadUrl(url)
             } else entry.callbacks.onBlockedNavigation(url)
         }
@@ -205,7 +191,7 @@ class BrowserWebViewRegistry(
                     entry.settings,
                     videoPage,
                     url,
-                    entry.documentIsAlreadyDark && false
+                    false
                 ),
                 youtubePage = isYoutubeDocumentUrl(url)
             )
@@ -245,15 +231,6 @@ class BrowserWebViewRegistry(
         view.visibility = View.VISIBLE
         view.bringToFront()
         return true
-    }
-    /**
-     * 非選択タブはhost内に残す。親Viewからの切離しは、タブを閉じるかレジストリを
-     * 破棄する時だけに限定し、動画・音声・ログインのWebView状態を保つ。
-     */
-    fun detachFromNativeHost(tabId: String, host: ViewGroup? = null) {
-        val view = entries[tabId]?.webView ?: return
-        val parent = view.parent as? ViewGroup ?: return
-        if (host == null) parent.removeView(view)
     }
 
 
@@ -544,9 +521,6 @@ class BrowserWebViewRegistry(
     }
 
     fun scrollBy(tabId: String, deltaY: Int) = entries[tabId]?.webView?.scrollBy(0, deltaY)
-    fun scrollToTop(tabId: String) = entries[tabId]?.webView?.scrollTo(0, 0)
-    /** `pageDown(true)`は縮尺値に依存せずWebView自身の文書末尾へ移動する。 */
-    fun scrollToBottom(tabId: String) = entries[tabId]?.webView?.pageDown(true)
     fun scrollToFraction(tabId: String, fraction: Float) = entries[tabId]?.let { entry ->
         val safeFraction = fraction.coerceIn(0f, 1f)
         // AndroidのcontentHeightはWebView倍率・端末実装差で物理scrollYと一致しない。
@@ -562,11 +536,7 @@ class BrowserWebViewRegistry(
     fun remove(tabId: String) {
         entries.remove(tabId)?.let { entry ->
             entry.isActive = false
-            runCatching { entry.documentStartScriptHandler?.remove() }
-            runCatching { entry.siteDocumentStartScriptHandler?.remove() }
             runCatching { entry.youtubePictureInPictureScriptHandler?.remove() }
-            entry.documentStartScriptHandler = null
-            entry.siteDocumentStartScriptHandler = null
             entry.youtubePictureInPictureScriptHandler = null
             entry.cookieFlushRunnable?.let(entry.webView::removeCallbacks)
             entry.cookieFlushRunnable = null
@@ -807,41 +777,6 @@ class BrowserWebViewRegistry(
         }
     }
 
-    /**
-     * ページの背景・color-scheme・theme-colorを読むだけで、DOMを変更せずに既存暗色ページを判定する。
-     * 背景輝度が0.18以下、またはページ自身がdark color-schemeを明示した場合のみ暗いとみなす。
-     */
-    private fun detectAlreadyDarkDocument(view: WebView, entry: Entry, url: String) {
-        // YouTube・Google動画などは専用CSS/PiP保護経路を維持し、一般文書だけで判定する。
-        if (!false || !isHttps(url) ||
-            isVideoPlaybackDocumentUrl(url) || isDarkModeExcluded(entry.settings, url)
-        ) {
-            releaseDarkRevealGuard(view, entry, url)
-            return
-        }
-        // 既に注入した反転CSSを外した本来のcomputed styleだけを読む。alpha=0の間に行うため白フラッシュは出ない。
-        view.evaluateJavascript(DARK_DETECTOR_WITHOUT_OVERRIDE_SCRIPT) { result ->
-            val isAlreadyDark = result.trim() == "true"
-            // 非同期評価中に遷移・ホーム復帰した場合は、古い文書の結果を採用しない。
-            if (entry.activeDocumentUrl != url) return@evaluateJavascript
-            if (entry.documentIsAlreadyDark == isAlreadyDark) {
-                releaseDarkRevealGuard(view, entry, url)
-                return@evaluateJavascript
-            }
-            entry.documentIsAlreadyDark = isAlreadyDark
-            val videoPage = isVideoPlaybackDocumentUrl(url)
-            configure(view, entry.settings, videoPage, isAlreadyDark, url)
-            applyDeepDarkCss(
-                view,
-                enabled = !entry.fullscreenVideoDarkeningSuppressed &&
-                    shouldApplyPageCssDarkening(entry.settings, videoPage, url, isAlreadyDark),
-                youtubePage = isYoutubeDocumentUrl(url)
-            )
-            CrashDiagnostics.record("already_dark_document_detected", "url=$url\ndark=$isAlreadyDark")
-            releaseDarkRevealGuard(view, entry, url)
-        }
-    }
-
     /** ページ開始時もWebViewを可視に保つ。Fulguris同様、判定中に表示面全体を隠さない。 */
     private fun beginDarkRevealGuard(view: WebView, entry: Entry, url: String) {
         entry.darkRevealPending = false
@@ -895,21 +830,6 @@ class BrowserWebViewRegistry(
                 CrashDiagnostics.record("youtube_pip_unlock_unsupported", "${throwable.javaClass.simpleName}: ${throwable.message.orEmpty()}")
             }
         }
-    }
-
-    /**
-     * 指定2標準リストからBraveが解決したscriptletを、対応するHTTPS主文書のJSより先に注入する。
-     * Rust側のtrust境界により、ユーザー追加URLの規則はscriptlet本文を返せない。
-     * YouTubeはiframeにも同じscriptletを届ける専用経路があるため、ここでは二重注入を避ける。
-     */
-    /**
-     * WebViewの初回可視化より前に一般ページの暗色CSSを登録し、白背景が一度描画されるのを防ぐ。
-     * 指定ホスト・動画ページは登録しないため、既存のYouTube/PiP保護経路と手動除外を侵害しない。
-     */
-    private fun prepareDarkDocumentStartScript(entry: Entry, url: String) {
-        runCatching { entry.darkDocumentStartScriptHandler?.remove() }
-        entry.darkDocumentStartScriptHandler = null
-        // 独自document-start dark CSSは使用しない。
     }
 
     /**
@@ -970,9 +890,11 @@ class BrowserWebViewRegistry(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
 
-            if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
-
-
+            if (request.isForMainFrame) {
+                entry.rearmPageLifecycle(request.url.toString())
+            } else if (entry.adBlockingEnabled && AdBlockInjector.isAdRequest(request.url.toString())) {
+                return AdBlockInjector.emptyResponse(request.requestHeaders)
+            }
             return super.shouldInterceptRequest(view, request)
         }
 
@@ -988,7 +910,7 @@ class BrowserWebViewRegistry(
                 view,
                 entry.settings,
                 isVideoPlaybackDocumentUrl(url),
-                entry.documentIsAlreadyDark && false,
+                false,
                 url
             )
             applyDeepDarkCss(
@@ -998,11 +920,11 @@ class BrowserWebViewRegistry(
                         entry.settings,
                         isVideoPlaybackDocumentUrl(url),
                         url,
-                        entry.documentIsAlreadyDark && false
+                        false
                     ),
                 youtubePage = isYoutubeDocumentUrl(url)
             )
-            detectAlreadyDarkDocument(view, entry, url)
+            releaseDarkRevealGuard(view, entry, url)
             entry.callbacks.onVisitedHistory(tabId, url)
             notifyHistoryState(tabId, view)
             completeBackNavigation(tabId, entry, view)
@@ -1049,8 +971,7 @@ class BrowserWebViewRegistry(
                 youtubePage = isYoutubeDocumentUrl(url)
             )
             if (entry != null) {
-                if (false) detectAlreadyDarkDocument(view, entry, url)
-                else releaseDarkRevealGuard(view, entry, url)
+                releaseDarkRevealGuard(view, entry, url)
             }
             super.onPageCommitVisible(view, url)
         }
@@ -1070,12 +991,11 @@ class BrowserWebViewRegistry(
                         entry.settings,
                         isVideoPlaybackDocumentUrl(url),
                         url,
-                        entry.documentIsAlreadyDark && false
+                        false
                     ),
                 youtubePage = isYoutubeDocumentUrl(url)
             )
-            if (false) detectAlreadyDarkDocument(view, entry, url)
-            else releaseDarkRevealGuard(view, entry, url)
+            releaseDarkRevealGuard(view, entry, url)
             if (isVideoPlaybackDocumentUrl(url)) recordVideoViewportMetrics(view, url, entry)
             scheduleCookieFlush(view, entry)
             entry.callbacks.onPageFinished(tabId, url, view.title)
@@ -1243,18 +1163,7 @@ class BrowserWebViewRegistry(
     private data class Entry(
         val webView: WebView,
         var loadedUrl: String? = null,
-        /** YouTube originを含むiframeへ登録するBrave scriptlet。 */
-        var documentStartScriptHandler: ScriptHandler? = null,
-        var documentStartScriptUrl: String? = null,
-        /** 一般ページの白フラッシュを防ぐdocument-start暗色CSS。 */
-        var darkDocumentStartScriptHandler: ScriptHandler? = null,
-        /** 主文書のoriginにだけ登録する、指定2標準リスト由来のtrusted scriptlet。 */
-        var siteDocumentStartScriptHandler: ScriptHandler? = null,
-        var siteDocumentStartScriptUrl: String? = null,
         var youtubePictureInPictureScriptHandler: ScriptHandler? = null,
-        /** 組込みYouTube広告メタデータ除去script。外部リストには実行権限を与えない。 */
-        /** warm navigationのplayer requestだけを補正する組込みscript。攻めたモード限定。 */
-        /** 既存sessionを再取得せずSABR backoffだけを短縮する組込みscript。攻めたモード限定。 */
         var cookieFlushRunnable: Runnable? = null,
         var callbacks: BrowserWebCallbacks = BrowserWebCallbacks.Empty,
         var settings: BrowserSettings = BrowserSettings(),
@@ -1371,13 +1280,6 @@ class BrowserWebViewRegistry(
 
     private fun youtubeHost(url: String): String? = runCatching { URI(url).host?.lowercase() }.getOrNull()
 
-    /** document-start APIは完全なHTTPS origin ruleを要求する。 */
-    private fun documentStartOriginRule(url: String): String? = runCatching {
-        val uri = URI(url)
-        if (!uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank()) null
-        else "https://${uri.host.lowercase()}"
-    }.getOrNull()
-
     private fun isYoutubeDocumentUrl(url: String): Boolean {
         val host = youtubeHost(url) ?: return false
         return host == "youtube.com" || host.endsWith(".youtube.com") ||
@@ -1388,15 +1290,6 @@ class BrowserWebViewRegistry(
     private fun isYoutubeShortsDocumentUrl(url: String): Boolean = runCatching {
         isYoutubeDocumentUrl(url) && URI(url).path.startsWith("/shorts/")
     }.getOrDefault(false)
-
-    /** プレーヤー・ページ骨格に触れる規則を避け、広告・販促要素だけをYouTubeへ再適用する。 */
-    private fun isSafeYoutubeAdSelector(selector: String): Boolean {
-        val normalized = selector.lowercase().trim()
-        if (normalized.isBlank() || normalized.length > 500) return false
-        val adToken = listOf("ad", "promoted", "sponsor", "masthead", "merchandise", "paid", "brand").any(normalized::contains)
-        val layoutToken = listOf("#player", "video", "iframe", "ytd-app", "ytm-app", "ytd-page-manager", "html", "body").any(normalized::contains)
-        return adToken && !layoutToken
-    }
 
     /** Google検索は動画タブとプレビュー展開を同じ検索文書上で行うため、広いcosmetic適用を避ける。 */
     private fun isGoogleSearchDocumentUrl(url: String): Boolean {
@@ -1417,27 +1310,7 @@ class BrowserWebViewRegistry(
     private fun isVideoPlaybackDocumentUrl(url: String): Boolean =
         isYoutubeDocumentUrl(url) || isGoogleVideoSearchDocumentUrl(url)
 
-    /**
-     * Google動画タブが生成するiframe、player script、映像chunk、内部APIは誤遮断から守る。
-     * 画像・スタイル・fontなどの非必須要求は通常のBrave規則に渡し、広告枠の遮断余地を残す。
-     */
-    private fun isGoogleVideoPreviewResource(documentUrl: String, resourceType: String): Boolean =
-        isGoogleVideoSearchDocumentUrl(documentUrl) && resourceType in PLAYBACK_CRITICAL_RESOURCE_TYPES
-
-    /**
-     * 映像復号とiframe表示に必須な要求だけを保護する。script/XHRは通常のBrave規則へ渡すことで、
-     * 以前機能していたYouTube広告・計測のネットワーク遮断を回復する。
-     */
-    private fun isYoutubePlaybackResource(url: String, resourceType: String): Boolean {
-        if (resourceType !in YOUTUBE_PLAYBACK_PROTECTED_RESOURCE_TYPES) return false
-        val host = youtubeHost(url) ?: return false
-        return host == "youtube.com" || host.endsWith(".youtube.com") ||
-            host == "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com") ||
-            host == "googlevideo.com" || host.endsWith(".googlevideo.com") ||
-            host == "youtubei.googleapis.com"
-    }
-
-    /** 再生保護の例外として、広告・計測専用と明示できる宛先だけ規則評価を継続する。 */
+    /** 動画ページの映像面と重なり要素の実寸を診断ログに残す。 */
     private fun recordVideoViewportMetrics(view: WebView, url: String, entry: Entry) {
         view.evaluateJavascript(VIDEO_VIEWPORT_METRICS_SCRIPT) { raw ->
             val metrics = runCatching { JSONTokener(raw ?: "\"\"").nextValue() as? String }.getOrNull().orEmpty()
@@ -1450,67 +1323,7 @@ class BrowserWebViewRegistry(
         }
     }
 
-    /**
-     * Braveの`$redirect`はdata URLとして返る。WebViewではリダイレクト先URLを安全に再発行できないため、
-     * 埋込み可能な小さなscript/style/imageだけを検証して返す。主文書、iframe、media、XHRは対象外とする。
-     */
-    private fun createSafeBraveRedirectResponse(dataUrl: String?, resourceType: String): WebResourceResponse? {
-        if (dataUrl.isNullOrBlank() || resourceType !in SAFE_REDIRECT_RESOURCE_TYPES ||
-            dataUrl.length > MAX_SAFE_REDIRECT_DATA_URL_CHARS
-        ) return null
-        val match = DATA_URL_BASE64_REGEX.matchEntire(dataUrl) ?: return null
-        val mimeType = match.groupValues[1].lowercase()
-        if (!isSafeRedirectMimeType(resourceType, mimeType)) return null
-        val bytes = runCatching { Base64.decode(match.groupValues[2], Base64.DEFAULT) }.getOrNull()
-            ?.takeIf { it.isNotEmpty() && it.size <= MAX_SAFE_REDIRECT_BYTES }
-            ?: return null
-        val encoding = if (mimeType.startsWith("text/") || mimeType.contains("javascript") || mimeType.endsWith("+xml")) {
-            "utf-8"
-        } else null
-        return WebResourceResponse(
-            mimeType, encoding, 200, "OK",
-            mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),
-            ByteArrayInputStream(bytes)
-        )
-    }
-
-    private fun isSafeRedirectMimeType(resourceType: String, mimeType: String): Boolean = when (resourceType) {
-        "script" -> mimeType in SAFE_REDIRECT_SCRIPT_MIME_TYPES
-        "stylesheet" -> mimeType == "text/css"
-        "image" -> mimeType in SAFE_REDIRECT_IMAGE_MIME_TYPES
-        else -> false
-    }
-
-    private fun resourceTypeFor(request: WebResourceRequest): String {
-        if (request.isForMainFrame) return "document"
-        val headers = request.requestHeaders
-        val destination = headers.entries.firstOrNull { it.key.equals("Sec-Fetch-Dest", ignoreCase = true) }?.value?.lowercase()
-        val accept = headers.entries.firstOrNull { it.key.equals("Accept", ignoreCase = true) }?.value?.lowercase().orEmpty()
-        return when (destination) {
-            "script" -> "script"
-            "style" -> "stylesheet"
-            "image" -> "image"
-            "font" -> "font"
-            "audio", "video", "track" -> "media"
-            "iframe", "frame" -> "subdocument"
-            "empty" -> "xmlhttprequest"
-            else -> when {
-                "text/css" in accept -> "stylesheet"
-                "javascript" in accept || "ecmascript" in accept -> "script"
-                "image/" in accept -> "image"
-                "video/" in accept || "audio/" in accept -> "media"
-                "application/json" in accept || "text/event-stream" in accept -> "xmlhttprequest"
-                request.url.path?.endsWith(".js", true) == true -> "script"
-                request.url.path?.endsWith(".css", true) == true -> "stylesheet"
-                request.url.path?.matches(IMAGE_EXTENSION_REGEX) == true -> "image"
-                request.url.path?.matches(MEDIA_EXTENSION_REGEX) == true -> "media"
-                else -> "other"
-            }
-        }
-    }
-
     private companion object {
-        const val ABOUT_BLANK_URL = "about:blank"
         const val VIDEO_DIMENSIONS_BRIDGE_NAME = "NekoBrowserVideoDimensions"
         const val VIDEO_BOUNDS_BRIDGE_NAME = "NekoBrowserVideoBounds"
         const val VIDEO_MEDIA_BRIDGE_NAME = "NekoMediaBridge"
@@ -1552,99 +1365,8 @@ class BrowserWebViewRegistry(
               }catch(e){return 'error';}
             })();
         """.trimIndent()
-        const val MAX_STATIC_COSMETIC_SELECTORS = 500
-        const val MAX_AGGRESSIVE_YOUTUBE_SELECTORS = 2_000
-        const val GENERIC_COSMETIC_DELAY_MS = 350L
-        const val MAX_SAFE_REDIRECT_DATA_URL_CHARS = 256 * 1024
-        const val MAX_SAFE_REDIRECT_BYTES = 128 * 1024
-        val DATA_URL_BASE64_REGEX = Regex("^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$", RegexOption.IGNORE_CASE)
-        val SAFE_REDIRECT_RESOURCE_TYPES = setOf("script", "stylesheet", "image")
-        val SAFE_REDIRECT_SCRIPT_MIME_TYPES = setOf("application/javascript", "application/x-javascript", "text/javascript")
-        val SAFE_REDIRECT_IMAGE_MIME_TYPES = setOf("image/gif", "image/png", "image/svg+xml")
 
         const val COOKIE_FLUSH_DEBOUNCE_MS = 750L
-        const val YOUTUBE_SCRIPTLET_DOCUMENT_URL = "https://www.youtube.com/"
-        /**
-         * 既存ページのDOM・style・viewportを一切変更しない暗色テーマ検出。
-         * 透明背景は親要素を遡り、0.18以下の実背景、または0.35以下かつdark color-schemeを採用する。
-         */
-        /** ページ自身のstyleを変えずに、既存のねこぶらうざ暗色styleだけを一時停止して本来の色を返す。 */
-        val DARK_DETECTOR_WITHOUT_OVERRIDE_SCRIPT = """
-            (function(){
-              var style=document.getElementById('__https_browser_deep_dark');
-              var previous=style?style.textContent:null;
-              if(style) style.textContent='';
-              try {
-                function parseColor(value){
-                  var m=String(value||'').match(/rgba?\(\s*([\d.]+)[,\s]+\s*([\d.]+)[,\s]+\s*([\d.]+)(?:[,\s]+\s*([\d.]+))?\s*\)/i);
-                  if(!m) return null;
-                  var a=m[4]===undefined?1:parseFloat(m[4]);
-                  return a>0.02?[parseFloat(m[1]),parseFloat(m[2]),parseFloat(m[3])]:null;
-                }
-                function lum(rgb){return (0.2126*rgb[0]+0.7152*rgb[1]+0.0722*rgb[2])/255;}
-                function background(node){
-                  for(var current=node,i=0;current&&i<8;i++,current=current.parentElement){
-                    var color=parseColor(getComputedStyle(current).backgroundColor);
-                    if(color) return lum(color);
-                  }
-                  return null;
-                }
-                var body=background(document.body);
-                var value=body===null?background(document.documentElement):body;
-                var root=getComputedStyle(document.documentElement);
-                var bodyStyle=document.body?getComputedStyle(document.body):null;
-                var scheme=(root.colorScheme+' '+(bodyStyle?bodyStyle.colorScheme:'')).toLowerCase();
-                return value!==null ? (value<=0.18 || (value<=0.35&&scheme.indexOf('dark')!==-1)) : scheme.indexOf('dark')!==-1;
-              } finally { if(style) style.textContent=previous; }
-            })();
-        """.trimIndent()
-
-        val ALREADY_DARK_DOCUMENT_DETECTOR_SCRIPT = """
-            (function(){
-              function parseColor(value){
-                var m=String(value||'').match(/rgba?\(\s*([\d.]+)[,\s]+\s*([\d.]+)[,\s]+\s*([\d.]+)(?:[,\s]+\s*([\d.]+))?\s*\)/i);
-                if(!m){
-                  var hex=String(value||'').match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-                  if(!hex) return null;
-                  var raw=hex[1];
-                  if(raw.length===3) raw=raw.replace(/(.)/g,'$1$1');
-                  return [parseInt(raw.slice(0,2),16),parseInt(raw.slice(2,4),16),parseInt(raw.slice(4,6),16)];
-                }
-                var a=m[4]===undefined?1:parseFloat(m[4]);
-                return a>0.02?[parseFloat(m[1]),parseFloat(m[2]),parseFloat(m[3])]:null;
-              }
-              function luminance(rgb){
-                return (0.2126*rgb[0]+0.7152*rgb[1]+0.0722*rgb[2])/255;
-              }
-              function backgroundOf(node){
-                var current=node;
-                for(var i=0; current && i<8; i++,current=current.parentElement){
-                  var color=parseColor(getComputedStyle(current).backgroundColor);
-                  if(color) return luminance(color);
-                }
-                return null;
-              }
-              var bodyBackground=backgroundOf(document.body);
-              var background=bodyBackground===null?backgroundOf(document.documentElement):bodyBackground;
-              var rootStyle=getComputedStyle(document.documentElement);
-              var bodyStyle=document.body?getComputedStyle(document.body):null;
-              var scheme=(rootStyle.colorScheme+' '+(bodyStyle?bodyStyle.colorScheme:'')).toLowerCase();
-              var meta=document.querySelector('meta[name="theme-color"]');
-              var metaColor=meta?parseColor(meta.content):null;
-              if(background!==null) return background<=0.18 || (background<=0.35 && scheme.indexOf('dark')!==-1);
-              return scheme.indexOf('dark')!==-1 || (metaColor!==null && luminance(metaColor)<=0.18);
-            })();
-        """.trimIndent()
-
-        /** 一般ページを最初の描画前から黒い暗色CSSで覆い、document-start未対応時はnative背景の黒を保つ。 */
-        fun darkDocumentStartScript(): String = """
-            (function(){
-              var id='__https_browser_deep_dark';
-              var style=document.getElementById(id);
-              if(!style){style=document.createElement('style');style.id=id;(document.documentElement||document.head).appendChild(style);}
-              style.textContent=${JSONObject.quote(DEEP_DARK_CSS)};
-            })();
-        """.trimIndent()
 
         // Brave Android PR #28593と同じく、YouTubeのページ側PiP阻害フラグを最小限だけ無効化する。
         // config未生成・対応外構造ではno-opとし、複数回のSPA遷移でも追加の要素を作らない。
@@ -1829,35 +1551,6 @@ class BrowserWebViewRegistry(
             "img,canvas,iframe,svg,picture,object,embed{filter:invert(1) hue-rotate(180deg)!important}" +
             "video,video::-webkit-media-controls-panel,video::-webkit-media-controls-enclosure{filter:invert(1) hue-rotate(180deg)!important}" +
             "input,textarea,select{background:#e8e8e8!important;color:#111!important}"
-        // YouTubeは反転ではなく前景・背景を直接指定し、動画surfaceは常にfilter:noneで保護する。
-        val YOUTUBE_PAGE_DARK_CSS = "html,body,ytd-app,ytm-app{background:#0f0f0f!important;color:#f1f1f1!important;color-scheme:dark!important}" +
-            "#masthead-container,#masthead,ytd-masthead,ytm-mobile-topbar-renderer,ytm-pivot-bar-renderer{background:#0f0f0f!important;color:#f1f1f1!important}" +
-            "ytd-app *,ytm-app *{border-color:#3f3f3f!important}" +
-            "ytd-app a,ytm-app a,ytd-app yt-formatted-string,ytm-app yt-formatted-string,ytd-app h1,ytd-app h2,ytd-app h3,ytd-app h4,ytd-app span,ytm-app span{color:#f1f1f1!important}" +
-            "input,textarea,select{background:#202020!important;color:#f1f1f1!important;border-color:#555!important}" +
-            "video,video *,#player video,ytm-player video{filter:none!important;background:#000!important;color-scheme:normal!important}" +
-            ".ytp-gradient-top,.ytp-gradient-bottom{filter:none!important}"
-        val YOUTUBE_AD_CSS = """
-            #player-ads,.ytp-ad-overlay-container,.ytp-ad-module,
-            ytd-display-ad-renderer,ytd-ad-slot-renderer,ytd-promoted-video-renderer,
-            ytd-promoted-sparkles-web-renderer,ytd-companion-slot-renderer,
-            ytd-action-companion-ad-renderer,ytm-ad-slot-renderer,
-            ytm-promoted-sparkles-web-renderer,ytm-companion-ad-renderer,
-            ytd-rich-item-renderer:has(> ytd-ad-slot-renderer),
-            ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer),
-            ytd-search-pyv-renderer.ytd-item-section-renderer,
-            ytd-watch-next-secondary-results-renderer > ytd-ad-slot-renderer,
-            ytd-rich-item-renderer > ytd-ad-slot-renderer,
-            ytd-item-section-renderer > ytd-ad-slot-renderer,
-            ytm-rich-item-renderer > ad-slot-renderer,
-            lazy-list > ad-slot-renderer,
-            ytm-companion-slot[data-content-type] > ytm-companion-ad-renderer,
-            #masthead-ad.ytd-rich-grid-renderer,
-            .ytp-suggested-action > .ytp-suggested-action-badge,
-            yt-overlay-product-sticker {
-              display:none!important;visibility:hidden!important;
-            }
-        """.trimIndent()
         // Google動画タブを含む動画文書で、映像面と重なり要素を実寸診断する。
         val VIDEO_VIEWPORT_METRICS_SCRIPT = """
             (function(){
@@ -1881,28 +1574,7 @@ class BrowserWebViewRegistry(
               });
             })();
         """.trimIndent()
-        // 各リソース要求ごとに Regex を生成しない。ページの大量リソース読み込み時の
-        // Kotlinヒープ確保を抑え、ネイティブフィルタ評価だけに処理を限定する。
-        val IMAGE_EXTENSION_REGEX = Regex(".*\\.(png|jpe?g|gif|webp|svg|avif)$", RegexOption.IGNORE_CASE)
-        val MEDIA_EXTENSION_REGEX = Regex(".*\\.(mp4|webm|m3u8|mpd|mp3|m4a)$", RegexOption.IGNORE_CASE)
         val GOOGLE_VIDEO_SEARCH_QUERY_REGEX = Regex("(?:^|&)(?:tbm=vid|udm=7)(?:&|$)")
-        // 動画本体と再生iframeだけを保護し、script/XHRはYouTubeを含む全サイトでBraveへ判定させる。
-        // 初回遷移だけscript/XHRを素通りさせると広告初期化が通り、再読み込み時との差が生じる。
-        val PLAYBACK_CRITICAL_RESOURCE_TYPES = setOf("media", "subdocument")
-        val YOUTUBE_PLAYBACK_PROTECTED_RESOURCE_TYPES = setOf("media", "subdocument")
-        val COLLECT_COSMETIC_KEYS_SCRIPT = """
-            (function(){
-              var classes=[],ids=[],seenClasses=new Set(),seenIds=new Set();
-              var elements=document.querySelectorAll('[class],[id]');
-              for(var i=0;i<elements.length;i++){
-                if(ids.length>=800 && classes.length>=1200) break;
-                var element=elements[i];
-                if(element.id && !seenIds.has(element.id) && ids.length<800){seenIds.add(element.id);ids.push(element.id);}
-                if(element.classList){element.classList.forEach(function(name){if(!seenClasses.has(name) && classes.length<1200){seenClasses.add(name);classes.push(name);}});}
-              }
-              return JSON.stringify({classes:classes,ids:ids});
-            })();
-        """.trimIndent()
     }
 
     private fun upgradeToHttps(url: String): String? = runCatching {

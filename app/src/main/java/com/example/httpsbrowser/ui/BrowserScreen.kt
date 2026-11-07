@@ -69,22 +69,6 @@ private data class FullscreenContent(
     val callback: WebChromeClient.CustomViewCallback
 )
 
-/**
- * GoogleアカウントのWebダイアログはページ内の右端をスクロール操作に使う。
- * DOM・viewport・CSSには触れず、Google系文書でのみ独自レールを外してWebViewへ全てのタッチを渡す。
- */
-private fun isGoogleWebSurface(url: String): Boolean {
-    val host = runCatching { Uri.parse(url).host?.lowercase(Locale.ROOT) }.getOrNull().orEmpty()
-    return host == "google.com" || host.endsWith(".google.com") || host.startsWith("google.") || host.contains(".google.")
-}
-
-private fun shouldShowRightEdgeScrollRail(url: String): Boolean = true
-
-private fun isGoogleImageSurface(url: String): Boolean {
-    val lower = url.lowercase(Locale.ROOT)
-    return isGoogleWebSurface(url) && (lower.contains("tbm=isch") || lower.contains("udm=2"))
-}
-
 @Composable
 fun BrowserScreen(viewModel: BrowserViewModel, externalUrl: String? = null) {
     val context = LocalContext.current

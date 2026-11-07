@@ -152,13 +152,6 @@ object BrowserDownloadDispatcher {
         trackedDownloads.remove(trackingId)
     }
 
-    fun clearFinished() {
-        trackedDownloads.entries.removeIf { (_, tracked) ->
-            val managerId = tracked.downloadManagerId
-            managerId == null && tracked.workId == null
-        }
-    }
-
     /** 高速モードの互換性fallbackでも、同じ行で通常DownloadManagerの進捗へ切り替える。 */
     internal fun switchToNormal(context: Context, trackingId: String?, request: BrowserDownloadRequest) {
         val managerId = enqueueNormal(context, request)

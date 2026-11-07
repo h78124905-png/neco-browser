@@ -557,24 +557,6 @@ object BrowserSheets {
     }
 
     @Composable
-    private fun AdBlockEditorDialog(title: String, initialName: String, initialUrl: String, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
-        var name by remember(title, initialName) { mutableStateOf(initialName) }
-        var url by remember(title, initialUrl) { mutableStateOf(initialUrl) }
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(title) },
-            text = {
-                Column {
-                    OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("リスト名") })
-                    OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, label = { Text("https://…") }, modifier = Modifier.padding(top = 8.dp))
-                }
-            },
-            confirmButton = { TextButton(onClick = { onConfirm(name, url) }) { Text("保存") } },
-            dismissButton = { TextButton(onClick = onDismiss) { Text("キャンセル") } }
-        )
-    }
-
-    @Composable
     private fun PageHeader(title: String, onBack: () -> Unit, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Row {

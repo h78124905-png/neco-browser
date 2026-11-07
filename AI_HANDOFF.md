@@ -10,11 +10,10 @@
 - `app/src/main/java/com/example/httpsbrowser/ui/BrowserScreen.kt`
   - Compose UI、WebView配置、全画面開始時の動画操作UI表示
 - `app/src/main/java/com/example/httpsbrowser/web/BrowserWebView.kt`
-  - WebView設定、popup WebView、MinimalAdBlockClient、PiP用JS、動画速度適用
+  - WebView設定、popup WebView、PiP用JS、動画速度適用、shouldInterceptRequestでの広告通信遮断
 - `app/src/main/java/com/example/httpsbrowser/web/AdBlockInjector.kt`
-  - document-start広告CSSとYouTube広告データprune
-- `app/src/main/java/com/example/httpsbrowser/web/MinimalAdBlockClient.kt`
-  - YouTube広告関連URLの最小限ネットワーク遮断
+  - document-start広告CSS、YouTube player応答のprune、スキップ補助
+  - `isAdRequest`: Soul Browser同等の通信遮断（doubleclick/googlesyndication/googleadservices、pagead・api/stats/ads・get_midroll_info・/ad_break・=adunit&・短い&ad_パラメータ）
 - `app/src/main/java/com/example/httpsbrowser/data/BrowserModels.kt`
   - BrowserSettings、タブ、設定ページ
 - `app/src/main/java/com/example/httpsbrowser/data/BrowserRepository.kt`
@@ -27,6 +26,7 @@
 ## 広告ブロック
 Rust/JNI、Braveエンジン、AdGuard/EasyListフィルター資産、フィルター更新処理は削除済みです。
 端末側AdGuard DNSとの併用を前提に、アプリ内では軽量なCSS/JS注入とYouTube広告URL遮断のみを行います。
+JSONの書換えは /youtubei/v1/player 応答だけに限定（next/reelやJSON.parseを触るとぐるぐるが発生したため不採用）。要求本文のADUNIT書換えも廃止。
 
 ## 設定UI
 暗色化と広告ブロックは、それぞれ単一トグルです。high/normal切替は削除済みです。

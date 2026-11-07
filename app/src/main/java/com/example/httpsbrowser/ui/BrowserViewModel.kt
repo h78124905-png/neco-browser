@@ -306,11 +306,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         updateTab(tabId) { it.copy(canGoBack = canGoBack, canGoForward = canGoForward) }
     }
 
-    fun openSuggestion(suggestion: Suggestion): PreparedNavigation? = when (suggestion.type) {
-        SuggestionType.GOOGLE_SEARCH -> prepareNavigation(suggestion.url)
-        else -> prepareNavigation(suggestion.url)
-    }
-
     fun toggleTabSheet() { uiState = uiState.copy(isTabSheetVisible = !uiState.isTabSheetVisible) }
 
     /** シークレット切替は既存の通常タブを変換せず、専用の非履歴タブを選択または作成する。 */
@@ -383,8 +378,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         uiState = uiState.copy(bookmarks = if (toEnd) remaining + selected else selected + remaining)
         persistSoon()
     }
-
-    fun isBookmarked(url: String): Boolean = url.isNotBlank() && uiState.bookmarks.any { it.url == url }
 
     fun removeHistory(id: String) {
         uiState = uiState.copy(history = uiState.history.filterNot { it.id == id })
