@@ -1,6 +1,5 @@
 package com.example.httpsbrowser.web
 
-import java.io.ByteArrayInputStream
 import java.lang.ref.WeakReference
 
 import android.content.Context
@@ -890,11 +889,7 @@ class BrowserWebViewRegistry(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
 
-            if (request.isForMainFrame) {
-                entry.rearmPageLifecycle(request.url.toString())
-            } else if (entry.adBlockingEnabled && AdBlockInjector.isAdRequest(request.url.toString())) {
-                return AdBlockInjector.emptyResponse(request.requestHeaders)
-            }
+            if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
             return super.shouldInterceptRequest(view, request)
         }
 

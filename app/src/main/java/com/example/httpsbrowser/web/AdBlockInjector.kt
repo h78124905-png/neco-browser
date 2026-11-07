@@ -1,7 +1,5 @@
 package com.example.httpsbrowser.web
 
-import java.io.ByteArrayInputStream
-import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -96,10 +94,28 @@ object AdBlockInjector {
             } catch (e) {}
         });
 
-        // [3] player API の応答からだけ広告枠を取り除く（要求本文は書き換えない）。
+        // [3] fetch フックの限定復活 (貫通対策)
+        // ★検知リスクを最小限にするため、/youtubei/v1/player のみに限定
         const origFetch = window.fetch;
+        // 広告枠そのものをサーバーに返させない: player要求のclientScreenをADUNITへ書き換える。
+        // 返答から広告を後で消すより早く、広告待ちの読み込み（ぐるぐる）も起きにくい。
+        function rewritePlayerBody(body) {
+            return (typeof body === 'string' && body.indexOf('"clientScreen":"WATCH"') !== -1)
+                ? body.replace('"clientScreen":"WATCH"', '"clientScreen":"ADUNIT"') : body;
+        }
         window.fetch = async function(...args) {
             const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] instanceof URL ? args[0].href : (args[0]?.url || ''));
+            if (/youtubei\/v1\/player/.test(reqUrl)) {
+                try {
+                    if (args[1] && typeof args[1].body === 'string') {
+                        args[1] = Object.assign({}, args[1], { body: rewritePlayerBody(args[1].body) });
+                    } else if (args[0] instanceof Request && !args[1]) {
+                        const text = await args[0].clone().text();
+                        const changed = rewritePlayerBody(text);
+                        if (changed !== text) args[0] = new Request(args[0], { body: changed });
+                    }
+                } catch (e) {}
+            }
             const res = await origFetch.apply(this, args);
             const url = reqUrl;
             
@@ -346,44 +362,4 @@ object AdBlockInjector {
 
     private fun quote(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
-
-    /**
-     * Soul Browser と同じ通信レベルの遮断。広告の取得・計測・広告枠の問い合わせを空応答で潰す。
-     * JSONやプレーヤーには触れないため、読み込み待ち（ぐるぐる）を起こしにくい。
-     */
-    private val AD_HOST_SUFFIXES = listOf("doubleclick.net", "googlesyndication.com", "googleadservices.com")
-
-    fun isAdRequest(url: String): Boolean {
-        val schemeEnd = url.indexOf("://")
-        if (schemeEnd <= 0) return false
-        val hostStart = schemeEnd + 3
-        val slash = url.indexOf('/', hostStart)
-        val host = (if (slash == -1) url.substring(hostStart) else url.substring(hostStart, slash))
-            .substringBefore(':').lowercase()
-        if (AD_HOST_SUFFIXES.any { host == it || host.endsWith(".$it") }) return true
-        if (slash == -1) return false
-        val path = url.substring(slash + 1)
-        if (path.startsWith("pagead") || path.startsWith("api/stats/ads") || path.startsWith("get_midroll_info")) return true
-        if (url.endsWith("/ad.js") || url.contains("/ad_break") || url.contains("=adunit&")) return true
-        // &ad_xxx= のような短い広告用パラメータ（Soul Browserの判定と同じく名前は11文字未満）
-        val adParam = url.indexOf("&ad_", slash)
-        if (adParam != -1) {
-            val nameStart = adParam + 4
-            val eq = url.indexOf('=', nameStart)
-            if (eq > nameStart && eq - nameStart < 11) return true
-        }
-        return false
-    }
-
-    fun emptyResponse(requestHeaders: Map<String, String>): WebResourceResponse {
-        val origin = requestHeaders.entries.firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value
-        val headers = buildMap {
-            put("Cache-Control", "no-store")
-            if (!origin.isNullOrBlank()) {
-                put("Access-Control-Allow-Origin", origin)
-                put("Access-Control-Allow-Credentials", "true")
-            }
-        }
-        return WebResourceResponse("text/plain", "utf-8", 200, "OK", headers, ByteArrayInputStream(ByteArray(0)))
-    }
 }
