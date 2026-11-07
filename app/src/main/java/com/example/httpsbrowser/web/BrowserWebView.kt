@@ -295,9 +295,8 @@ class BrowserWebViewRegistry(
                   // YouTubeはプレーヤー内部の速度で上書きし直すため、内部APIにも同じ速度を渡す。
                   var player = v.closest ? v.closest('.html5-video-player') : null;
                   player = player || document.getElementById('movie_player');
-                  var adShowing = player && player.classList && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
-                  if (adShowing) return;
-                  if (player && typeof player.setPlaybackRate === 'function') {
+                  var adShowing = player && player.classList && player.classList.contains('ad-showing');
+                  if (!adShowing && player && typeof player.setPlaybackRate === 'function') {
                     var internal = typeof player.getPlaybackRate === 'function' ? player.getPlaybackRate() : -1;
                     if (Math.abs(internal - currentRate) > 0.001) player.setPlaybackRate(currentRate);
                   }
@@ -600,10 +599,9 @@ class BrowserWebViewRegistry(
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            // Soul Browserと同じUA。WebViewの印（; wv、Version/4.0、端末名）を出さない。
-            // Soulは広告ブロックOFFでもYouTube広告が出ないため、その差分として採用（2026-11-07検証中）。
-            val chromeVersion = Regex("Chrome/([0-9.]+)").find(userAgentString)?.groupValues?.get(1) ?: "131.0.0.0"
-            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Mobile Safari/537.36 Soul/4.0"
+            // WebView専用UA分岐を避け、通常のモバイルChrome相当のページを要求する。
+            // Version/端末情報は残し、WebView識別子だけを取り除く。
+            userAgentString = userAgentString.replace("; wv", "")
             // Fulgurisの標準モバイル表示に合わせ、viewportの拡大縮小を強制しない。
             // WebViewはコンテンツ領域の直接の子なので、アプリ側のhostサイズ補正は不要。
             useWideViewPort = false
@@ -689,12 +687,6 @@ class BrowserWebViewRegistry(
                 activityRef.get()?.runOnUiThread {
                     activityRef.get()?.onWebMediaEnded()
                 }
-            }
-
-            /** 広告調査用の診断記録（クラッシュ診断に残る）。 */
-            @JavascriptInterface
-            fun diag(event: String?, detail: String?) {
-                com.example.httpsbrowser.CrashDiagnostics.record("yt_" + (event ?: "").take(40), (detail ?: "").take(300))
             }
 
             /** YouTubeのdocument-start scriptが参照する、ユーザーが選んだ現在の再生速度。 */
@@ -897,16 +889,7 @@ class BrowserWebViewRegistry(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
 
-            if (request.isForMainFrame) {
-                entry.rearmPageLifecycle(request.url.toString())
-            } else if (entry.adBlockingEnabled) {
-                val pageHost = runCatching { Uri.parse(entry.activeDocumentUrl ?: entry.loadedUrl).host }.getOrNull()
-                val url = request.url.toString()
-                AdBlockInjector.noteGate(pageHost)
-                if (AdBlockInjector.isYoutubePageHost(pageHost) && AdBlockInjector.isAdRequest(url)) {
-                    return AdBlockInjector.blockedResponse(url)
-                }
-            }
+            if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
             return super.shouldInterceptRequest(view, request)
         }
 

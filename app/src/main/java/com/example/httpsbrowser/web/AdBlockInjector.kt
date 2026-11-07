@@ -1,7 +1,5 @@
 package com.example.httpsbrowser.web
 
-import java.io.ByteArrayInputStream
-import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -26,6 +24,10 @@ object AdBlockInjector {
             pointer-events: none !important;
         }
 
+        /* 貫通した広告は末尾へ送るまでの一瞬も見せない */
+        .html5-video-player.ad-showing video, .html5-video-player.ad-interrupting video {
+            opacity: 0 !important;
+        }
     """
 
     private const val YOUTUBE_PRUNE_JS = """
@@ -52,33 +54,84 @@ object AdBlockInjector {
             if (window.caches) caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
         }
 
-        // JSONやfetchには触れない（Soul Browserと同じ方針。改変はぐるぐるの原因になりやすい）。
+        // [2] JSON改変 (黒画面対策)
+        // ★中庸版の思想: status には触れず、errorScreen と reason だけを削除する
+        const AD_KEYS = new Set([
+            'adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams',
+            'adReasons', 'promoted', 'ypc_spin_up', 'adBreaks', 'adFormat',
+            'adYieldGroupKey', 'clientGpu', 'paidContentOverlay', 'adBreakParams'
+        ]);
 
-        // 診断: 広告表示の開始・終了と長さを記録する。
-        (function() {
-            let adSince = 0, logs = 0, stallSince = 0, stallLogged = false;
-            function diag(e, d) { try { if (logs++ < 40) window.NekoMediaBridge && NekoMediaBridge.diag(e, d); } catch (x) {} }
-            setInterval(() => {
-                const p = document.querySelector('.html5-video-player');
-                const v = document.querySelector('video.html5-main-video') || document.querySelector('.html5-video-player video');
-                const ad = !!(p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting')));
-                if (ad && !adSince) {
-                    adSince = Date.now();
-                    const skip = !!document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
-                    diag('ad_start', 'host=' + location.host + ' dur=' + (v ? v.duration : 'none') + ' skipBtn=' + skip);
-                } else if (!ad && adSince) {
-                    diag('ad_end', 'ms=' + (Date.now() - adSince));
-                    adSince = 0;
+        function pruneAds(obj, depth = 0) {
+            if (!obj || typeof obj !== 'object' || depth > 12) return;
+            for (const key in obj) {
+                if (AD_KEYS.has(key)) {
+                    if (Array.isArray(obj[key])) obj[key] = [];
+                    else delete obj[key];
+                } 
+                // ★重要: status には触れない（映像トラック破棄を防止）
+                // errorScreen と reason だけを削除してエラー画面を消す
+                else if (key === 'playabilityStatus' && obj[key]) {
+                    delete obj[key].errorScreen;
+                    delete obj[key].reason;
+                    delete obj[key].adBlockerDetected;
                 }
-                if (v && !ad && !v.paused && v.readyState < 3) {
-                    if (!stallSince) stallSince = Date.now();
-                    else if (!stallLogged && Date.now() - stallSince > 5000) {
-                        stallLogged = true;
-                        diag('stall', 'rs=' + v.readyState + ' ns=' + v.networkState + ' t=' + v.currentTime.toFixed(1) + ' dur=' + v.duration + ' src=' + (v.currentSrc ? v.currentSrc.slice(0, 40) : 'none') + ' cls=' + (p ? p.className.slice(0, 120) : ''));
+                else {
+                    pruneAds(obj[key], depth + 1);
+                }
+            }
+        }
+
+        // グローバル変数フック
+        ['ytInitialPlayerResponse', 'ytInitialData'].forEach(name => {
+            let val;
+            try {
+                Object.defineProperty(window, name, {
+                    get() { return val; },
+                    set(v) { pruneAds(v); val = v; },
+                    configurable: true
+                });
+            } catch (e) {}
+        });
+
+        // [3] fetch フックの限定復活 (貫通対策)
+        // ★検知リスクを最小限にするため、/youtubei/v1/player のみに限定
+        const origFetch = window.fetch;
+        // 広告枠そのものをサーバーに返させない: player要求のclientScreenをADUNITへ書き換える。
+        // 返答から広告を後で消すより早く、広告待ちの読み込み（ぐるぐる）も起きにくい。
+        function rewritePlayerBody(body) {
+            return (typeof body === 'string' && body.indexOf('"clientScreen":"WATCH"') !== -1)
+                ? body.replace('"clientScreen":"WATCH"', '"clientScreen":"ADUNIT"') : body;
+        }
+        window.fetch = async function(...args) {
+            const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] instanceof URL ? args[0].href : (args[0]?.url || ''));
+            if (/youtubei\/v1\/player/.test(reqUrl)) {
+                try {
+                    if (args[1] && typeof args[1].body === 'string') {
+                        args[1] = Object.assign({}, args[1], { body: rewritePlayerBody(args[1].body) });
+                    } else if (args[0] instanceof Request && !args[1]) {
+                        const text = await args[0].clone().text();
+                        const changed = rewritePlayerBody(text);
+                        if (changed !== text) args[0] = new Request(args[0], { body: changed });
                     }
-                } else { stallSince = 0; stallLogged = false; }
-            }, 300);
-        })();
+                } catch (e) {}
+            }
+            const res = await origFetch.apply(this, args);
+            const url = reqUrl;
+            
+            // player API のみフック
+            if (/youtubei\/v1\/player/.test(url)) {
+                try {
+                    const clone = res.clone();
+                    const json = await clone.json();
+                    pruneAds(json);
+                    return new Response(JSON.stringify(json), {
+                        status: res.status, statusText: res.statusText, headers: res.headers
+                    });
+                } catch (e) {}
+            }
+            return res;
+        };
 
         // [4] 広告が貫通した時の最後の砦: スキップを押し、押せなければミュートして末尾へ送る。
         let adMutedByUs = false;
@@ -93,14 +146,12 @@ object AdBlockInjector {
             if (!video) return;
             if (isAd) {
                 if (!video.muted) { video.muted = true; adMutedByUs = true; }
-                try { if (video.playbackRate < 16) video.playbackRate = 16; } catch (e) {}
                 if (isFinite(video.duration) && video.duration > 0 && video.currentTime < video.duration - 0.3) {
                     try { video.currentTime = video.duration - 0.1; } catch (e) {}
                 }
             } else if (adMutedByUs) {
                 video.muted = false;
                 adMutedByUs = false;
-                try { if (video.playbackRate >= 16) video.playbackRate = (typeof nekoWantedRate === "function" && nekoWantedRate()) || window.__httpsBrowserPlaybackRate || 1; } catch (e) { try { video.playbackRate = 1; } catch (x) {} }
             }
         }
 
@@ -311,54 +362,4 @@ object AdBlockInjector {
 
     private fun quote(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "'"
-
-    /**
-     * Soul Browser と同じ通信遮断。YouTubeのページ上でだけ判定し、空の text/plain を返す。
-     * CORSヘッダーは付けない（別オリジンの要求はすぐ失敗扱いになり、プレーヤーが待ち続けない）。
-     */
-    private val AD_HOST_SUFFIXES = listOf("doubleclick.net", "googlesyndication.com")
-    private val loggedBlocks = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
-
-    fun isYoutubePageHost(host: String?): Boolean {
-        val h = host?.lowercase() ?: return false
-        return h == "youtube.com" || h == "m.youtube.com" || h == "www.youtube.com"
-    }
-
-    fun isAdRequest(url: String): Boolean {
-        val schemeEnd = url.indexOf("://")
-        if (schemeEnd <= 0) return false
-        val hostStart = schemeEnd + 3
-        val slash = url.indexOf('/', hostStart)
-        if (slash <= hostStart || slash >= url.length - 2) return false
-        val host = url.substring(hostStart, slash).substringBefore(':').lowercase()
-        if (AD_HOST_SUFFIXES.any { host == it || host.endsWith(".$it") }) return true
-        val p = slash + 1
-        if (url.startsWith("pagead", p) || url.startsWith("api/stats/ads", p) || url.startsWith("get_midroll_info", p)) return true
-        // プレーヤー本体の広告モジュール（/s/player/.../ad.js）は止めない。止めると読込待ちで10数秒ぐるぐるする。
-        if (url.endsWith("/ad.js") && !url.contains("/s/player/")) return true
-        if ( url.contains("/ad_break") || url.contains("=adunit&")) return true
-        val adParam = url.indexOf("&ad_", p)
-        if (adParam != -1) {
-            val nameStart = adParam + 4
-            val eq = url.indexOf('=', nameStart)
-            if (eq > nameStart && eq - nameStart < 11) return true
-        }
-        return false
-    }
-
-    private val loggedGateHosts = java.util.Collections.synchronizedSet(HashSet<String>())
-    fun noteGate(host: String?) {
-        val h = host ?: "null"
-        if (loggedGateHosts.size < 20 && loggedGateHosts.add(h)) {
-            runCatching { com.example.httpsbrowser.CrashDiagnostics.record("adblock_gate", "host=$h youtube=${isYoutubePageHost(host)}") }
-        }
-    }
-
-    fun blockedResponse(url: String): WebResourceResponse {
-        val key = url.substringBefore('?').take(120)
-        if (loggedBlocks.size < 60 && loggedBlocks.add(key)) {
-            runCatching { com.example.httpsbrowser.CrashDiagnostics.record("adblock_blocked", url.take(300)) }
-        }
-        return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
-    }
 }
