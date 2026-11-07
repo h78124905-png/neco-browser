@@ -1,5 +1,6 @@
 package com.example.httpsbrowser.ui
 
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -449,7 +450,7 @@ object BrowserSheets {
         val context = LocalContext.current
         var details by remember { mutableStateOf(CrashDiagnostics.read(context)) }
         PageHeader("クラッシュ診断", onBack, actionLabel = "更新") { details = CrashDiagnostics.read(context) }
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+        Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp)) {
             Text("アプリの終了後に再度起動すると、Android 11以降ではOSが記録した終了理由を表示します。自動送信は行いません。")
             TextButton(onClick = onShare, modifier = Modifier.padding(top = 8.dp)) { Text("診断情報を共有") }
             if (details.isBlank()) {
