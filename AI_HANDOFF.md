@@ -26,7 +26,7 @@
 ## 広告ブロック
 Rust/JNI、Braveエンジン、AdGuard/EasyListフィルター資産、フィルター更新処理は削除済みです。
 端末側AdGuard DNSとの併用を前提に、アプリ内では軽量なCSS/JS注入とYouTube広告URL遮断のみを行います。
-JSONの書換えは /youtubei/v1/player 応答だけに限定（next/reelやJSON.parseを触るとぐるぐるが発生したため不採用）。player要求のclientScreenはADUNITへ書換え。
+JSONの書換えは /youtubei/v1/player 応答だけに限定（next/reelやJSON.parseを触るとぐるぐるが発生したため不採用）。2026-11-07: Soul完全再現版に変更。JSON/fetch改変・ADUNITは廃止。YouTubeページ上でだけ通信遮断し、空text/plain（CORSヘッダー無し）を返す。遮断URLはクラッシュ診断に adblock_blocked として記録。
 
 ## 設定UI
 暗色化と広告ブロックは、それぞれ単一トグルです。high/normal切替は削除済みです。

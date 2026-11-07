@@ -889,7 +889,15 @@ class BrowserWebViewRegistry(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val entry = entries[tabId] ?: return null
 
-            if (request.isForMainFrame) entry.rearmPageLifecycle(request.url.toString())
+            if (request.isForMainFrame) {
+                entry.rearmPageLifecycle(request.url.toString())
+            } else if (entry.adBlockingEnabled) {
+                val pageHost = runCatching { Uri.parse(entry.activeDocumentUrl ?: entry.loadedUrl).host }.getOrNull()
+                val url = request.url.toString()
+                if (AdBlockInjector.isYoutubePageHost(pageHost) && AdBlockInjector.isAdRequest(url)) {
+                    return AdBlockInjector.blockedResponse(url)
+                }
+            }
             return super.shouldInterceptRequest(view, request)
         }
 
