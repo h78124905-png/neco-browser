@@ -600,9 +600,10 @@ class BrowserWebViewRegistry(
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            // WebView専用UA分岐を避け、通常のモバイルChrome相当のページを要求する。
-            // Version/端末情報は残し、WebView識別子だけを取り除く。
-            userAgentString = userAgentString.replace("; wv", "")
+            // Soul Browserと同じUA。WebViewの印（; wv、Version/4.0、端末名）を出さない。
+            // Soulは広告ブロックOFFでもYouTube広告が出ないため、その差分として採用（2026-11-07検証中）。
+            val chromeVersion = Regex("Chrome/([0-9.]+)").find(userAgentString)?.groupValues?.get(1) ?: "131.0.0.0"
+            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Mobile Safari/537.36 Soul/4.0"
             // Fulgurisの標準モバイル表示に合わせ、viewportの拡大縮小を強制しない。
             // WebViewはコンテンツ領域の直接の子なので、アプリ側のhostサイズ補正は不要。
             useWideViewPort = false
