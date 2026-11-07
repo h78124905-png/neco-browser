@@ -40,6 +40,9 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import java.net.URI
 import java.util.Locale
+
+/** 検証用: 独自JS注入・SW遮断をすべて止め、Soulと同じ素のWebViewでYouTube広告の有無を確かめる。 */
+private const val PLAIN_YOUTUBE_TEST = true
 import java.util.concurrent.ConcurrentHashMap
 
 class BrowserWebViewRegistry(
@@ -60,7 +63,7 @@ class BrowserWebViewRegistry(
         entry.callbacks = callbacks
         entry.settings = settings
         entry.adBlockingEnabled = settings.adBlockingEnabled
-        ensureYoutubePictureInPictureScript(entry)
+        if (!PLAIN_YOUTUBE_TEST) ensureYoutubePictureInPictureScript(entry)
         // 121e47bの構成を基準にする。動画文書を対象へ含めるかは明示設定で選択する。
         val darkModeChanged = entry.appliedForceDark != settings.forceDarkPages ||
             entry.appliedDarkModeExcludedHosts != settings.darkModeExcludedHosts
@@ -604,8 +607,8 @@ class BrowserWebViewRegistry(
             userAgentString = userAgentString.replace("; wv", "")
             // Fulgurisの標準モバイル表示に合わせ、viewportの拡大縮小を強制しない。
             // WebViewはコンテンツ領域の直接の子なので、アプリ側のhostサイズ補正は不要。
-            useWideViewPort = false
-            loadWithOverviewMode = false
+            useWideViewPort = PLAIN_YOUTUBE_TEST
+            loadWithOverviewMode = PLAIN_YOUTUBE_TEST
             databaseEnabled = true
             setSupportMultipleWindows(true)
             builtInZoomControls = true
@@ -700,10 +703,10 @@ class BrowserWebViewRegistry(
                 }
             }
         }, VIDEO_MEDIA_BRIDGE_NAME)
-        installYoutubeServiceWorkerBlocker()
+        if (!PLAIN_YOUTUBE_TEST) installYoutubeServiceWorkerBlocker()
         webViewClient = SecureClient(tabId)
         webChromeClient = SecureChromeClient(tabId)
-        AdBlockInjector.inject(this)
+        if (!PLAIN_YOUTUBE_TEST) AdBlockInjector.inject(this)
         setDownloadListener(SecureDownloadListener(tabId))
         setOnTouchListener { _, event ->
             if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
@@ -796,6 +799,7 @@ class BrowserWebViewRegistry(
      * DOM変更・metadata・resize・再生開始のいずれでも再評価し、同じサイズはページ側で重複通知しない。
      */
     private fun installVideoDimensionsReporter(view: WebView) {
+        if (PLAIN_YOUTUBE_TEST) return
         view.evaluateJavascript(VIDEO_DIMENSIONS_REPORTER_SCRIPT, null)
     }
 
@@ -991,7 +995,7 @@ class BrowserWebViewRegistry(
                 youtubePage = isYoutubeDocumentUrl(url)
             )
             releaseDarkRevealGuard(view, entry, url)
-            if (isVideoPlaybackDocumentUrl(url)) recordVideoViewportMetrics(view, url, entry)
+            if (!PLAIN_YOUTUBE_TEST && isVideoPlaybackDocumentUrl(url)) recordVideoViewportMetrics(view, url, entry)
             scheduleCookieFlush(view, entry)
             entry.callbacks.onPageFinished(tabId, url, view.title)
             notifyHistoryState(tabId, view)
