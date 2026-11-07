@@ -58,6 +58,25 @@ object AdBlockInjector {
 
         // JSONやfetchには触れない（Soul Browserと同じ方針。改変はぐるぐるの原因になりやすい）。
 
+        // 診断: 広告表示の開始・終了と長さを記録する。
+        (function() {
+            let adSince = 0, logs = 0;
+            function diag(e, d) { try { if (logs++ < 40) window.NekoMediaBridge && NekoMediaBridge.diag(e, d); } catch (x) {} }
+            setInterval(() => {
+                const p = document.querySelector('.html5-video-player');
+                const v = document.querySelector('video.html5-main-video') || document.querySelector('.html5-video-player video');
+                const ad = !!(p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting')));
+                if (ad && !adSince) {
+                    adSince = Date.now();
+                    const skip = !!document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, [class*="skip-button"]');
+                    diag('ad_start', 'host=' + location.host + ' dur=' + (v ? v.duration : 'none') + ' skipBtn=' + skip);
+                } else if (!ad && adSince) {
+                    diag('ad_end', 'ms=' + (Date.now() - adSince));
+                    adSince = 0;
+                }
+            }, 300);
+        })();
+
         // [4] 広告が貫通した時の最後の砦: スキップを押し、押せなければミュートして末尾へ送る。
         let adMutedByUs = false;
         function clickSkipButton() {
@@ -318,6 +337,14 @@ object AdBlockInjector {
             if (eq > nameStart && eq - nameStart < 11) return true
         }
         return false
+    }
+
+    private val loggedGateHosts = java.util.Collections.synchronizedSet(HashSet<String>())
+    fun noteGate(host: String?) {
+        val h = host ?: "null"
+        if (loggedGateHosts.size < 20 && loggedGateHosts.add(h)) {
+            runCatching { com.example.httpsbrowser.CrashDiagnostics.record("adblock_gate", "host=$h youtube=${isYoutubePageHost(host)}") }
+        }
     }
 
     fun blockedResponse(url: String): WebResourceResponse {

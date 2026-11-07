@@ -689,6 +689,12 @@ class BrowserWebViewRegistry(
                 }
             }
 
+            /** 広告調査用の診断記録（クラッシュ診断に残る）。 */
+            @JavascriptInterface
+            fun diag(event: String?, detail: String?) {
+                com.example.httpsbrowser.CrashDiagnostics.record("yt_" + (event ?: "").take(40), (detail ?: "").take(300))
+            }
+
             /** YouTubeのdocument-start scriptが参照する、ユーザーが選んだ現在の再生速度。 */
             @JavascriptInterface
             fun getPlaybackRate(): Float = youtubePlaybackRate
@@ -894,6 +900,7 @@ class BrowserWebViewRegistry(
             } else if (entry.adBlockingEnabled) {
                 val pageHost = runCatching { Uri.parse(entry.activeDocumentUrl ?: entry.loadedUrl).host }.getOrNull()
                 val url = request.url.toString()
+                AdBlockInjector.noteGate(pageHost)
                 if (AdBlockInjector.isYoutubePageHost(pageHost) && AdBlockInjector.isAdRequest(url)) {
                     return AdBlockInjector.blockedResponse(url)
                 }
