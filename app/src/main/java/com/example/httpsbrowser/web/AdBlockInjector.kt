@@ -26,10 +26,6 @@ object AdBlockInjector {
             pointer-events: none !important;
         }
 
-        /* 貫通した広告は末尾へ送るまでの一瞬も見せない */
-        .html5-video-player.ad-showing video, .html5-video-player.ad-interrupting video {
-            opacity: 0 !important;
-        }
     """
 
     private const val YOUTUBE_PRUNE_JS = """
@@ -60,7 +56,7 @@ object AdBlockInjector {
 
         // 診断: 広告表示の開始・終了と長さを記録する。
         (function() {
-            let adSince = 0, logs = 0;
+            let adSince = 0, logs = 0, stallSince = 0, stallLogged = false;
             function diag(e, d) { try { if (logs++ < 40) window.NekoMediaBridge && NekoMediaBridge.diag(e, d); } catch (x) {} }
             setInterval(() => {
                 const p = document.querySelector('.html5-video-player');
@@ -74,6 +70,13 @@ object AdBlockInjector {
                     diag('ad_end', 'ms=' + (Date.now() - adSince));
                     adSince = 0;
                 }
+                if (v && !ad && !v.paused && v.readyState < 3) {
+                    if (!stallSince) stallSince = Date.now();
+                    else if (!stallLogged && Date.now() - stallSince > 5000) {
+                        stallLogged = true;
+                        diag('stall', 'rs=' + v.readyState + ' ns=' + v.networkState + ' t=' + v.currentTime.toFixed(1) + ' dur=' + v.duration + ' src=' + (v.currentSrc ? v.currentSrc.slice(0, 40) : 'none') + ' cls=' + (p ? p.className.slice(0, 120) : ''));
+                    }
+                } else { stallSince = 0; stallLogged = false; }
             }, 300);
         })();
 
@@ -90,12 +93,14 @@ object AdBlockInjector {
             if (!video) return;
             if (isAd) {
                 if (!video.muted) { video.muted = true; adMutedByUs = true; }
+                try { if (video.playbackRate < 16) video.playbackRate = 16; } catch (e) {}
                 if (isFinite(video.duration) && video.duration > 0 && video.currentTime < video.duration - 0.3) {
                     try { video.currentTime = video.duration - 0.1; } catch (e) {}
                 }
             } else if (adMutedByUs) {
                 video.muted = false;
                 adMutedByUs = false;
+                try { if (video.playbackRate >= 16) video.playbackRate = (typeof nekoWantedRate === "function" && nekoWantedRate()) || window.__httpsBrowserPlaybackRate || 1; } catch (e) { try { video.playbackRate = 1; } catch (x) {} }
             }
         }
 

@@ -295,8 +295,9 @@ class BrowserWebViewRegistry(
                   // YouTubeはプレーヤー内部の速度で上書きし直すため、内部APIにも同じ速度を渡す。
                   var player = v.closest ? v.closest('.html5-video-player') : null;
                   player = player || document.getElementById('movie_player');
-                  var adShowing = player && player.classList && player.classList.contains('ad-showing');
-                  if (!adShowing && player && typeof player.setPlaybackRate === 'function') {
+                  var adShowing = player && player.classList && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
+                  if (adShowing) return;
+                  if (player && typeof player.setPlaybackRate === 'function') {
                     var internal = typeof player.getPlaybackRate === 'function' ? player.getPlaybackRate() : -1;
                     if (Math.abs(internal - currentRate) > 0.001) player.setPlaybackRate(currentRate);
                   }
