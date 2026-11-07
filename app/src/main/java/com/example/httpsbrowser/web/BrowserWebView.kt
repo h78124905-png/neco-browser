@@ -43,7 +43,50 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** 検証用: 独自JS注入・SW遮断をすべて止め、Soulと同じ素のWebViewでYouTube広告の有無を確かめる。 */
-private const val PLAIN_YOUTUBE_TEST = true
+private const val PLAIN_YOUTUBE_TEST = false
+
+/** Soulは端末のデータセーバー経由で Save-Data: on を送っており、YouTube広告が出ない。同じ条件を再現する。 */
+private const val YOUTUBE_SAVE_DATA = true
+private val SAVE_DATA_HEADERS = mapOf("Save-Data" to "on")
+private fun isYoutubeUrl(url: String?): Boolean = runCatching {
+    val host = URI(url ?: return false).host?.lowercase(Locale.ROOT) ?: return false
+    host == "youtube.com" || host.endsWith(".youtube.com")
+}.getOrDefault(false)
+private fun WebView.loadWithSaveData(url: String) {
+    if (YOUTUBE_SAVE_DATA && isYoutubeUrl(url)) loadUrl(url, SAVE_DATA_HEADERS) else loadUrl(url)
+}
+private val YOUTUBE_SAVE_DATA_SCRIPT = """
+(function(){
+  if (window.__nekoSaveData) return; window.__nekoSaveData = true;
+  try {
+    var c = navigator.connection;
+    if (c) Object.defineProperty(c, 'saveData', { get: function(){ return true; }, configurable: true });
+  } catch (e) {}
+  function sameSite(u){
+    try { var h = new URL(u, location.href).hostname; return h === 'youtube.com' || h.endsWith('.youtube.com'); } catch (e) { return false; }
+  }
+  var of = window.fetch;
+  if (of) window.fetch = function(input, init){
+    try {
+      var url = (typeof input === 'string') ? input : (input && input.url);
+      if (sameSite(url)) {
+        if (input instanceof Request && !init) {
+          var h0 = new Headers(input.headers); h0.set('Save-Data','on');
+          input = new Request(input, { headers: h0 });
+        } else {
+          init = Object.assign({}, init || {});
+          var h = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+          h.set('Save-Data','on'); init.headers = h;
+        }
+      }
+    } catch (e) {}
+    return of.call(this, input, init);
+  };
+  var oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(m, u){ this.__nekoSD = sameSite(u); return oo.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function(){ try { if (this.__nekoSD) this.setRequestHeader('Save-Data','on'); } catch (e) {} return os.apply(this, arguments); };
+})();
+""".trimIndent()
 
 class BrowserWebViewRegistry(
     private val context: Context
@@ -97,7 +140,7 @@ class BrowserWebViewRegistry(
             entry.activeDocumentUrl = tab.lastRequestedUrl
             entry.rearmPageLifecycle(tab.lastRequestedUrl)
             CrashDiagnostics.recordWebViewNavigation(tab.lastRequestedUrl)
-            entry.webView.loadUrl(tab.lastRequestedUrl)
+            entry.webView.loadWithSaveData(tab.lastRequestedUrl)
         }
         return entry.webView
     }
@@ -117,7 +160,7 @@ class BrowserWebViewRegistry(
                 // 通常サイトへ連続遷移しても、白いページが先に見える状態を作らない。
                 beginDarkRevealGuard(entry.webView, entry, url)
                 CrashDiagnostics.recordWebViewNavigation(url)
-                entry.webView.loadUrl(url)
+                entry.webView.loadWithSaveData(url)
             } else entry.callbacks.onBlockedNavigation(url)
         }
     }
@@ -707,6 +750,13 @@ class BrowserWebViewRegistry(
         webViewClient = SecureClient(tabId)
         webChromeClient = SecureChromeClient(tabId)
         if (!PLAIN_YOUTUBE_TEST) AdBlockInjector.inject(this)
+        if (YOUTUBE_SAVE_DATA && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            runCatching {
+                WebViewCompat.addDocumentStartJavaScript(
+                    this, YOUTUBE_SAVE_DATA_SCRIPT, setOf("https://youtube.com", "https://*.youtube.com")
+                )
+            }.onFailure { CrashDiagnostics.record("save_data_unsupported", it.javaClass.simpleName) }
+        }
         setDownloadListener(SecureDownloadListener(tabId))
         setOnTouchListener { _, event ->
             if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
